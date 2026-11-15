@@ -2,7 +2,19 @@
 
 Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverprojekte. GoR verbindet verschiedene Spiele und Communities unter einem Network.
 
-## Neu in Version 4.2.0
+## Automatische Einrichtung seit Version 4.3.0
+
+Nach einer bestätigten Discord-Verbindung richtet sich der Bot selbst ein. Mit dauerhaftem Speicher startet die GoR-Pflege automatisch und gleicht den verwalteten Aufbau danach alle 15 Minuten erneut ab. Ein manuelles `/communitypanel` ist für den Einstieg nicht mehr erforderlich.
+
+- **16 Rollen:** vorhandene Rollen weiterverwenden, Farben und Darstellung vereinheitlichen, fehlende Rollen ergänzen und ihre Reihenfolge unterhalb der Botrolle ordnen. Auswahlrollen bleiben ohne globale Rechte. Vorhandene zusätzliche Teamrechte werden erhalten; Moderationsrollen erhalten die vorgesehenen Nachrichten- und Threadrechte.
+- **10 Kategorien und 41 Kanäle:** nummerierte Bereichsüberschriften, richtige Zuordnung, Themen, Schreibpausen und vollständige Rechteprofile für öffentliche, interne, CW- und Finanzbereiche.
+- **11 Infotafeln:** Regeln, Einstieg, Projekte, Finanzierung, Kontakt und Teamabläufe werden automatisch veröffentlicht beziehungsweise auf ihren vorhandenen Nachrichten aktualisiert. Community- und Supportmenü sind eingeschlossen.
+- **Native Discord-Funktionen:** Community-Profil, Regel- und Updatekanal, AFK, Standardbenachrichtigungen, deutscher Einstieg mit zwei Auswahlfragen und ein grundlegender Schutz gegen Erwähnungsspam.
+- **Bot-Betrieb:** Befehlsregistrierung, Präsenz, Servernickname, dauerhafte IDs, Einrichtungssperre und Wiederaufnahme nach Abbrüchen. Fehler in der Einrichtung schalten die Gateway-Verbindung nicht ab.
+
+Der Bot verwaltet die festgelegte GoR-Struktur. Zusätzliche, nicht zugeordnete Rollen und Kanäle sowie private Fallkanäle bleiben erhalten. Unklare frühere Anlagen werden zuerst anhand ihrer gespeicherten Kennung oder ihres genauen Inhalts gesucht; eine nicht bestätigte Erstellung wird nicht blind wiederholt. Der ausführliche Ablauf steht in [docs/AUTOMATIK.md](docs/AUTOMATIK.md).
+
+## Community-Funktionen seit Version 4.2.0
 
 - **Zentrales Community-Menü:** acht Schaltflächen für Einstieg, Spiele, Rollen, Hilfe, Projektaufnahme, FAQ, eigene Anliegen und Unterstützung. Einheitliche Karten, klare Anlaufstellen und private Navigation.
 - **Persönlicher Einstieg:** `/start` und `/hilfe` führen in drei Schritten zu Regeln, Mitspielern und Möglichkeiten zum Mitgestalten. `/faq` beantwortet typische Fragen, auf Wunsch zu einem bestimmten Thema.
@@ -13,7 +25,7 @@ Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverpr
 
 ## Das Menü auf deinem Discord aktivieren
 
-Nach dem bestätigten Botstart als **Discord-Inhaber** einmal `/communitypanel` ausführen. Der Bot legt das Menü im vorhandenen Startkanal an. Erneutes Ausführen aktualisiert dieselbe gespeicherte Nachricht. `/supportpanel` richtet wie bisher das Bedienfeld im Supportkanal ein.
+Die automatische Einrichtung veröffentlicht Community- und Supportmenü selbst. `/einrichtung` zeigt den Fortschritt und konkrete offene Punkte. Der Inhaber kann mit `/einrichten` einen sofortigen Abgleich starten. `/communitypanel` und `/supportpanel` bleiben als gezielte Aktualisierung einzelner Menüs verfügbar.
 
 Mitglieder starten über `/start` oder die Schaltflächen. Ein öffentlicher Klick öffnet eine persönliche Ansicht; die Navigation darin aktualisiert diese Ansicht. Öffentliche Karten werden dabei nicht durch persönliche Inhalte ersetzt.
 
@@ -23,11 +35,13 @@ Wenn eine frühere Anlage unklar ist, zuerst die bereits vorhandene Nachricht mi
 
 | Mitglieder | Zuständige Betreuung | Network-/Communityleitung | Inhaber |
 | --- | --- | --- | --- |
-| `/start`, `/hilfe`, `/faq` | `/team`, `/faelle` | `/projektstatus` | `/communitypanel` |
+| `/start`, `/hilfe`, `/faq` | `/team`, `/faelle` | `/projektstatus`, `/einrichtung` | `/communitypanel`, `/einrichten` |
 | `/rollen`, `/status` | `/uebernehmen` | `/serverpruefen` | `/communitypanel_zuordnen` |
 | `/support`, `/meine_faelle` | `/schliessen` gemäß Fallzuordnung | `/ankuendigung` | `/supportpanel`, `/panel_zuordnen` |
 | `/projektanfrage` | | | `/fall_zuordnen` |
 | `/unterstuetzen` | | | `/vorgaenge`, `/vorgang_zuordnen`, `/backup` |
+
+Zusätzlich stehen dem Inhaber `/einrichtung_automatik`, `/einrichtung_zuordnen` und `/einrichtung_freigeben` zur Verfügung.
 
 Die Rechte werden bei jeder Interaktion frisch geprüft. Die Teamübersichten enthalten nur Fälle aus der jeweiligen Zuständigkeit; Zahlungsanliegen bleiben bei Finanzzuständigkeit oder Inhaber. Der Anfragende darf seinen eigenen Fall ebenfalls abschließen.
 
@@ -50,6 +64,7 @@ Der Dienst verwendet das Repository **JuhlYT/GoR_Network_Discord**, Branch **mai
 | Laufzeit | Bun 1.4.4, festgelegte Produktionsabhängigkeiten |
 | Bot-Token | `GOR_DISCORD_BOT_TOKEN`; alternativ `DISCORD_TOKEN`, `DISCORD_BOT_TOKEN`, `BOT_TOKEN` oder `TOKEN` |
 | Daten | dauerhaftes Volume, empfohlen `/data`; eine Replik |
+| Automatische Pflege | standardmäßig aktiv; `GOR_AUTO_SETUP=false` deaktiviert automatische Läufe |
 | Privater Support | mit dauerhaftem Speicher standardmäßig aktiv; `GOR_SUPPORT_ENABLED=false` pausiert neue Fälle |
 | Gesundheitsprüfung | `/health`, Startfrist 120 Sekunden |
 | Neustart | bei Fehler, zehn Versuche; Schlafmodus aus |
@@ -77,4 +92,4 @@ bun run smoke
 
 Die Prüfungen decken Datenbankerweiterung, Wiederaufnahme, Fallzustände, private Zugriffe, Projektentscheidungen, Karten- und Befehlsgrenzen, doppelte Veröffentlichungen sowie die tatsächlichen Interaktionswege ab. Die CI baut zusätzlich den Produktionscontainer und prüft absolute, relative und zitierte Speicherpfade samt erhaltenem Datenbankinhalt nach einem Neustart.
 
-Die Discord-Gegenstelle ist in den automatischen Prüfungen simuliert. Die Live-Abnahme auf dem Zielserver steht in [docs/BETRIEB.md](docs/BETRIEB.md).
+Die Discord-Gegenstelle ist in den automatischen Prüfungen simuliert. Die Live-Abnahme auf dem Zielserver steht in [docs/BETRIEB.md](docs/BETRIEB.md). Die Rolle des Bots muss über den verwalteten Rollen liegen. Rechte, die Discord dem Bot nicht erteilt hat, kann er sich nicht selbst geben. Native Regelbestätigung wird nicht als eingerichtet behauptet: Discord stellt dafür derzeit keine dokumentierte Bearbeitungs-API bereit.

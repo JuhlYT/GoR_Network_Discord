@@ -2,7 +2,7 @@
 
 ## Ein gemeinsamer Eingang
 
-Der Discord-Inhaber veröffentlicht mit `/communitypanel` das Community-Menü im vorhandenen Startkanal. Die acht Schaltflächen führen zu persönlichem Einstieg, Spielen und Network, Rollenwahl, Support, Projektvorstellung, FAQ, eigenen Anliegen und freiwilliger Unterstützung. Das Menü bleibt öffentlich; persönliche Antworten erscheinen ausschließlich für das klickende Mitglied. Innerhalb dieser privaten Karten wird die vorhandene Ansicht aktualisiert.
+Seit Version 4.3.0 veröffentlicht und aktualisiert die automatische Einrichtung das Community-Menü selbst. `/einrichtung` zeigt ihren Stand. Der Inhaber kann mit `/communitypanel` weiterhin gezielt aktualisieren. Die acht Schaltflächen führen zu persönlichem Einstieg, Spielen und Network, Rollenwahl, Support, Projektvorstellung, FAQ, eigenen Anliegen und freiwilliger Unterstützung. Das Menü bleibt öffentlich; persönliche Antworten erscheinen ausschließlich für das klickende Mitglied. Innerhalb dieser privaten Karten wird die vorhandene Ansicht aktualisiert.
 
 Ein erneutes `/communitypanel` aktualisiert die gespeicherte Nachricht. Nach einer unklaren Anlage bestätigt `/communitypanel_zuordnen nachricht:…` eine tatsächlich vorhandene, zum Bot gehörende Menü-Nachricht. Es wird kein zweites Menü auf Verdacht angelegt.
 

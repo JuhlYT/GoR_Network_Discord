@@ -17,9 +17,10 @@ def run_scenario(root, bun, port, scenario):
         env = os.environ.copy()
         for key in ('GOR_DISCORD_BOT_TOKEN', 'DISCORD_TOKEN', 'DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'TOKEN',
                     'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_VOLUME_MOUNT_PATH', 'GOR_FIXTURE_ADMIN',
-                    'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG', 'GOR_FIXTURE_FLOW'):
+                    'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG', 'GOR_FIXTURE_FLOW',
+                    'GOR_AUTO_SETUP', 'GOR_FIXTURE_SETUP'):
             env.pop(key, None)
-        env.update(PORT=str(port), GOR_DATA_DIR=data, GOR_SUPPORT_ENABLED='false')
+        env.update(PORT=str(port), GOR_DATA_DIR=data, GOR_SUPPORT_ENABLED='false', GOR_AUTO_SETUP='false')
         mocked = scenario != 'missing-token'
         if mocked:
             env.update(RAILWAY_ENVIRONMENT_ID='startup-fixture', TOKEN='fixture-not-a-real-discord-token')
@@ -39,6 +40,8 @@ def run_scenario(root, bun, port, scenario):
                 env['GOR_FIXTURE_FLOW'] = scenario.removeprefix('flow-')
             if scenario == 'flow-project':
                 env['GOR_SUPPORT_ENABLED'] = 'true'
+            if scenario in ('automatic-setup', 'setup-failure'):
+                env.update(GOR_AUTO_SETUP='true', GOR_FIXTURE_SETUP=scenario)
         entry = 'tests/fixtures/startup.ts' if mocked else 'gor_network.ts'
         process = subprocess.Popen([bun, 'run', entry], cwd=root, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -76,7 +79,8 @@ def run_scenario(root, bun, port, scenario):
                             response += part
                     headers, body = response.split(b'\r\n\r\n', 1)
                     status = int(headers.split(b' ')[1])
-                    if status == wanted or route != '/health' or time.monotonic() > deadline:
+                    setup_ready = scenario not in ('automatic-setup', 'setup-failure') or json.loads(body).get('setup') == ('ready' if scenario == 'automatic-setup' else 'attention')
+                    if (status == wanted and setup_ready) or route != '/health' or time.monotonic() > deadline:
                         break
                     time.sleep(.05)
                 if status != wanted:
@@ -104,6 +108,8 @@ def run_scenario(root, bun, port, scenario):
                 raise AssertionError('Failed command registration was not isolated from the connection')
             if scenario.startswith('flow-') and 'fixture_flow_passed:' + scenario.removeprefix('flow-') not in logs:
                 raise AssertionError('The actual interaction handler did not confirm the community flow: ' + scenario)
+            if scenario in ('automatic-setup', 'setup-failure') and 'fixture_automatic_setup_called' not in logs:
+                raise AssertionError('Ready event did not trigger the automatic setup runner')
             if 'fixture-not-a-real-discord-token' in logs or 'private-fixture-body' in logs:
                 raise AssertionError('Private credential or error body leaked')
             backups = list(Path(data).glob('backups/*.sqlite'))
@@ -127,7 +133,8 @@ def main():
     root = Path(__file__).resolve().parent.parent
     scenarios = ['missing-token', 'invalid-token', 'connection-timeout', 'railway-no-volume', 'railway-admin',
                  'command-sync-failure', 'wrong-application']
-    scenarios += ['flow-' + flow for flow in ('start', 'public-guide', 'private-guide', 'private-roles', 'own', 'team', 'phase', 'project')]
+    scenarios += ['flow-' + flow for flow in ('start', 'public-guide', 'private-guide', 'private-roles', 'own', 'team', 'phase', 'project', 'setup', 'setupstatus')]
+    scenarios += ['automatic-setup', 'setup-failure']
     results = [run_scenario(root, args.bun, args.port, scenario) for scenario in scenarios]
     print(json.dumps({'smoke_test': 'passed', 'scenarios': results}))
 

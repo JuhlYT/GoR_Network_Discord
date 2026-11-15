@@ -44,7 +44,7 @@ class FixtureClient extends EventEmitter {
   runFlow(flow: string) {
     const component = ["public-guide", "private-guide", "private-roles"].includes(flow);
     const privateCard = flow.startsWith("private-");
-    const command = ({ start: "start", own: "meine_faelle", team: "team", phase: "projektstatus", project: "projektanfrage" } as Record<string, string>)[flow] || "start";
+    const command = ({ start: "start", own: "meine_faelle", team: "team", phase: "projektstatus", project: "projektanfrage", setup: "einrichten", setupstatus: "einrichtung" } as Record<string, string>)[flow] || "start";
     let acknowledgment = "";
     const verify = (payload: any) => {
       if (acknowledgment !== (privateCard ? "update" : "reply")) throw new Error("Incorrect private/public acknowledgment");
@@ -55,7 +55,8 @@ class FixtureClient extends EventEmitter {
         : flow === "private-roles" ? title.includes("Interessen")
         : flow === "own" ? title.includes("Deine Anliegen")
         : flow === "team" ? body.includes("keine Fallzuständigkeit") && !payload.embeds.length
-        : flow === "phase" ? body.includes("Networkleitung") && !payload.embeds.length : false;
+        : flow === "phase" || flow === "setupstatus" ? body.includes("Networkleitung") && !payload.embeds.length
+        : flow === "setup" ? body.includes("Serverinhaber") && !payload.embeds.length : false;
       if (!valid) throw new Error("Unexpected flow result");
       console.log("fixture_flow_passed:" + flow);
     };
@@ -87,4 +88,9 @@ class FixtureClient extends EventEmitter {
 }
 
 await main({ createClient: () => new FixtureClient() as unknown as Client,
-  startupTimeoutMs: Bun.env.GOR_FIXTURE_HANG === "true" ? 300 : undefined });
+  startupTimeoutMs: Bun.env.GOR_FIXTURE_HANG === "true" ? 300 : undefined,
+  setupRunner: Bun.env.GOR_FIXTURE_SETUP ? async () => {
+    console.log("fixture_automatic_setup_called");
+    if (Bun.env.GOR_FIXTURE_SETUP === "setup-failure") throw Object.assign(new Error("private-fixture-body"), { code: 50013 });
+    return { at: Date.now(), created: 0, updated: 0, unchanged: 1, adopted: 0, issues: [], status: "ready" };
+  } : undefined });

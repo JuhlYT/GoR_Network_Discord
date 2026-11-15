@@ -211,8 +211,8 @@ describe("Dauerbetrieb und Sicherungen", () => {
     }
     void client.destroy();
   });
-  test("24 vollständige Befehle sind eindeutig und innerhalb von Discords Grenzen", () => {
-    const defs = commandDefinitions(); expect(defs).toHaveLength(24); expect(new Set(defs.map(d => d.name)).size).toBe(24);
+  test("29 vollständige Befehle sind eindeutig und innerhalb von Discords Grenzen", () => {
+    const defs = commandDefinitions(); expect(defs).toHaveLength(29); expect(new Set(defs.map(d => d.name)).size).toBe(29);
     for (const d of defs) { expect(d.name.length).toBeLessThanOrEqual(32); expect(d.description.length).toBeLessThanOrEqual(100); expect(d.description.length).toBeGreaterThan(0); }
   });
   test("die einzelne Datei lässt sich auch als Railway-TSX parsen", () => {

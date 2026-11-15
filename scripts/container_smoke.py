@@ -46,6 +46,7 @@ def check_image(image, port, mount_path=None, data_dir='/data'):
     fixtures = Path(__file__).resolve().parent.parent / 'tests' / 'fixtures'
     command = ['run', '--detach', '--name', name, '--publish', f'127.0.0.1:{port}:8080',
                '--env', 'TOKEN=fixture-not-a-real-discord-token', '--env', 'RAILWAY_ENVIRONMENT_ID=startup-fixture',
+               '--env', 'GOR_AUTO_SETUP=false',
                '--env', f'GOR_DATA_DIR={data_dir}',
                '--mount', f'type=bind,source={fixtures},target=/app/tests/fixtures,readonly']
     if mount_path:

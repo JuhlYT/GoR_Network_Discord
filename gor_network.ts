@@ -1,11 +1,15 @@
-/** GoR Network bot, v4.2.0. Repository and container deployment (Bun).
- * No tokens, message-content intent, blanket command deletion or automatic server rebuild.
+/** GoR Network bot, v4.3.0. Repository and container deployment (Bun).
+ * Managed setup preserves unowned areas and member assignments; no message-content intent.
  * A persistent volume is required for case and publication management, not for connecting.
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { storageLocation } from "./storage_path";
+import { reconcileServer, hydrateManagedMaps, adoptSetupResource, SETUP_ISSUES, issueCode, resourceKnown, type SetupReport, type SetupContext } from "./auto_setup";
+import { SetupJournal } from "./setup_journal";
+import { BASIC } from "./setup_permissions";
+import { supportView } from "./server_content";
 import { communityHub, guideView, faqView, communityNavigation, sameCommunityPanel, GUIDE_TOPICS, FAQ_TOPICS,
   PROJECT_PHASES, isProjectPhase, canAdvanceProject, pageWindow, type ProjectPhase } from "./community_ui";
 import {
@@ -16,7 +20,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.2.0";
+export const VERSION = "4.3.0";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -90,7 +94,7 @@ export function runtimeSettings(env: RuntimeEnv) {
   const supportEnabled = storage !== "temporary" && !["false", "0", "off", "no"].includes((env.GOR_SUPPORT_ENABLED ?? "true").trim().toLowerCase());
   return { directory, storage, supportEnabled };
 }
-const TEMPORARY_ACTIONS = new Set(["start", "hilfe", "faq", "status", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5",
+const TEMPORARY_ACTIONS = new Set(["start", "hilfe", "faq", "status", "einrichtung", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5",
   ...GUIDE_TOPICS.map(topic => "gor:guide:v5:" + topic)]);
 export function requireStorage(settings: ReturnType<typeof runtimeSettings>, action: string) {
   if (settings.storage === "temporary" && !TEMPORARY_ACTIONS.has(action))
@@ -300,6 +304,16 @@ export function commandDefinitions() {
       .addChannelOption(o => o.setName("kanal").setDescription("Bestehender Fallkanal").addChannelTypes(ChannelType.GuildText).setRequired(true)),
     command("supportpanel", "Inhaber: das Supportbedienfeld veröffentlichen oder aktualisieren."),
     command("communitypanel", "Inhaber: das zentrale Community-Menü im Startkanal veröffentlichen."),
+    command("einrichtung", "Leitung: Stand der automatischen GoR-Einrichtung anzeigen."),
+    command("einrichten", "Inhaber: GoR-Einrichtung jetzt automatisch abgleichen."),
+    command("einrichtung_automatik", "Inhaber: automatische GoR-Pflege aktivieren oder pausieren.")
+      .addBooleanOption(o => o.setName("aktiv").setDescription("Automatische Pflege einschalten").setRequired(true)),
+    command("einrichtung_zuordnen", "Inhaber: einen vorhandenen Eintrag nach unklarer Anlage zuordnen.")
+      .addStringOption(o => o.setName("schluessel").setDescription("Fester Schlüssel aus /einrichtung, z. B. role:support").setRequired(true))
+      .addStringOption(o => o.setName("id").setDescription("Discord-ID des bereits vorhandenen Eintrags").setRequired(true)),
+    command("einrichtung_freigeben", "Inhaber: nach Prüfung eine sicher nicht erfolgte Anlage freigeben.")
+      .addStringOption(o => o.setName("schluessel").setDescription("Unklarer Schlüssel aus /einrichtung").setRequired(true))
+      .addBooleanOption(o => o.setName("nicht_vorhanden").setDescription("Ich habe geprüft: Der Eintrag wurde nicht angelegt").setRequired(true)),
     command("communitypanel_zuordnen", "Inhaber: ein bereits vorhandenes Community-Menü bestätigen.")
       .addStringOption(o => o.setName("nachricht").setDescription("Nachrichten-ID im Startkanal").setRequired(true)),
     command("panel_zuordnen", "Inhaber: ein bereits vorhandenes Supportbedienfeld bestätigen.")
@@ -428,7 +442,7 @@ export function healthResponse(path: string, ready: boolean, dbOk: boolean, stat
     { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv; startupTimeoutMs?: number } = {}) {
+export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv; startupTimeoutMs?: number; setupRunner?: (context: SetupContext) => Promise<SetupReport> } = {}) {
   process.umask(0o077);
   console.log(JSON.stringify({ at: new Date().toISOString(), event: "service_starting", version: VERSION }));
   const env = options.environment || Bun.env;
@@ -439,17 +453,23 @@ export async function main(options: { createClient?: () => Client; environment?:
     safeLog("data_directory_uses_attached_volume");
   safeLog("database_opening");
   const store = new Store(settings.directory);
+  const setupMaps = { roles: ROLES, categories: CATEGORIES, channels: CHANNELS };
+  hydrateManagedMaps(store, setupMaps);
   safeLog("database_opened");
   const client = options.createClient?.() || new Client({ intents: [GatewayIntentBits.Guilds], allowedMentions: MENTIONS,
     rest: { retries: 0, timeout: 15_000 } });
   let ready = false, verified = false, commandsReady = false, commandsSyncing = false;
   let state = "starting", stopped = false, lastHealthy = Date.now(), administratorReported = false;
+  const setupEnabled = !["false", "0", "off", "no"].includes((env.GOR_AUTO_SETUP ?? "true").trim().toLowerCase());
+  let setupRunning = false, setupState = "pending", lastSetupAttempt = 0;
+  let setupReport: SetupReport | null = null;
+  try { setupReport = JSON.parse(store.setting("auto_setup_report") || "null"); } catch {}
   let maintenance: ReturnType<typeof setTimeout> | undefined;
   let startupDeadline: ReturnType<typeof setTimeout> | undefined;
   const server = Bun.serve({ hostname: "0.0.0.0", port: Number(env.PORT || 8080),
     fetch(request) { let dbOk = false; try { dbOk = store.health(); } catch {}
       return healthResponse(new URL(request.url).pathname, ready && client.isReady(), dbOk, state,
-        { storage: settings.storage, commands: commandsReady ? "registered" : "pending" }); } });
+        { storage: settings.storage, commands: commandsReady ? "registered" : "pending", setup: setupState }); } });
   safeLog("health_listener_started");
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T,>(fn: () => Promise<T>) => {
@@ -474,6 +494,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     if (client.isReady()) {
       lastHealthy = Date.now();
       if (verified && !commandsReady) void registerCommands();
+      if (verified) void runSetup();
     }
     else if (Date.now() - lastHealthy > 300_000) { safeLog("connection_watchdog_restart"); void shutdown(1); return; }
     maintenance = setTimeout(maintain, 60_000);
@@ -607,7 +628,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     if (!me.permissions.has(P.ManageRoles)) throw new UserError("Dem Bot fehlt die Rollenverwaltung.");
     await guild.roles.fetch(); const channels = await guild.channels.fetch();
     const publicParents = new Set(["ankommen", "community", "spielen", "unterstuetzung", "hilfe", "clonewars"].map(k => CATEGORIES[k]));
-    const harmless = P.ViewChannel | P.ReadMessageHistory | P.SendMessages | P.EmbedLinks | P.AttachFiles | P.Connect | P.Speak | P.UseVAD;
+    const harmless = BASIC;
     for (const key of Object.keys(SELF_ROLES)) {
       const r = guild.roles.cache.get(ROLES[key]);
       if (!r || r.managed || r.permissions.bitfield !== 0n || r.comparePositionTo(me.roles.highest) >= 0)
@@ -696,7 +717,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       case "start":
       case "hilfe": await answer(i, "", guideView("start", CHANNELS)); break;
       case "faq": await answer(i, "", faqView(i.options.getString("thema") || undefined, CHANNELS)); break;
-      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commandsReady ? "bestätigt" : "wird erneut versucht"}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nRollenwahl und Orientierung sind verfügbar.\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
+      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commandsReady ? "bestätigt" : "wird erneut versucht"}\nAutomatische Einrichtung: ${setupState}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
       case "unterstuetzen": await answer(i, "", guideView("unterstuetzen", CHANNELS)); break;
       case "rollen": await rolesView(i, member); break;
       case "meine_faelle": await ownCases(i, member); break;
@@ -765,17 +786,18 @@ export async function main(options: { createClient?: () => Client; environment?:
       }); break;
       case "supportpanel": await serial(async () => {
         own(member); const ch = await textChannel(guild, CHANNELS.support), saved = store.setting("panel_message_id");
+        const payload = { ...supportView(), allowedMentions: MENTIONS };
         if (saved === "pending") throw new UserError("Die letzte Anlage ist unklar. Bitte die vorhandene Nachricht mit /panel_zuordnen bestätigen.");
         let message;
         if (saved) {
           message = await ch.messages.fetch(saved); if (message.author.id !== APPLICATION) throw new UserError("Das gespeicherte Bedienfeld gehört nicht zum Bot.");
-          await message.edit({ content: panelBody, components: panel(), allowedMentions: MENTIONS });
+          await message.edit(payload);
         } else {
-          store.setting("panel_message_id", "pending"); message = await ch.send({ content: panelBody, components: panel(), allowedMentions: MENTIONS });
+          store.setting("panel_message_id", "pending"); message = await ch.send(payload);
           store.setting("panel_message_id", message.id);
         }
         const check = await ch.messages.fetch({ message: message.id, force: true });
-        if (check.content !== panelBody) throw new UserError("Der Bedienfeldinhalt ist noch nicht bestätigt.");
+        if (!sameCommunityPanel(check, supportView(), APPLICATION)) throw new UserError("Der Bedienfeldinhalt ist noch nicht bestätigt.");
         store.audit(member.id, "panel_publish", message.id); await answer(i, `Supportbedienfeld: ${message.url}`);
       }); break;
       case "communitypanel": await serial(async () => {
@@ -805,6 +827,42 @@ export async function main(options: { createClient?: () => Client; environment?:
         if (!sameCommunityPanel(message, communityHub(CHANNELS), APPLICATION)) throw new UserError("Autor, Inhalt und Schaltflächen passen nicht zum aktuellen GoR Community-Menü.");
         store.setting("community_panel_message_id", id); store.audit(member.id, "community_panel_recover", id);
         await answer(i, `Das vorhandene Community-Menü ist bestätigt: ${message.url}`);
+      }); break;
+      case "einrichtung": {
+        leadership(member);
+        const issues = setupReport?.issues || [], pending = new SetupJournal(store.db).pending();
+        const mode = settings.storage === "temporary" ? "Wartet auf dauerhafte Datenhaltung" : !setupEnabled ? "Über die Laufzeitkonfiguration pausiert" : store.setting("auto_setup_paused") === "true" ? "Vom Inhaber pausiert" : "Automatisch beim Start und alle 15 Minuten";
+        const view = embed("GoR · Automatische Serverpflege", `**Betrieb:** ${mode}\n**Aktueller Stand:** ${setupRunning ? "Einrichtung läuft" : setupState}`)
+          .addFields({ name: "Verwaltete Bereiche", value: "16 Rollen · 10 Kategorien · 41 Kanäle · 11 Infotafeln\nDazu Community-Profil, AFK, Einstieg, Rollenwahl und Erwähnungsschutz." });
+        if (setupReport) view.addFields({ name: "Letzter Lauf", value: `<t:${Math.floor(setupReport.at / 1000)}:R>\n${setupReport.created} angelegt · ${setupReport.updated} aktualisiert · ${setupReport.unchanged} bereits passend` });
+        if (issues.length) view.addFields({ name: `${issues.length} Punkte prüfen`, value: issues.slice(0, 6).map(item => `**${item.key}**\n${SETUP_ISSUES[item.code] || SETUP_ISSUES.unexpected_error}`).join("\n\n") });
+        if (pending.length) view.addFields({ name: "Unklare Anlagen", value: pending.slice(0, 8).map(item => `\`${item.key}\``).join("\n") + "\nInhaber: vorhandenen Eintrag mit /einrichtung_zuordnen bestätigen." });
+        await answer(i, "", { embeds: [view.toJSON()] }); break;
+      }
+      case "einrichten": {
+        own(member); if (setupRunning) { await answer(i, "Die Einrichtung läuft bereits. /einrichtung zeigt den Stand."); break; }
+        void runSetup(true); await answer(i, "Die GoR-Einrichtung wurde gestartet. Der Bot bleibt dabei erreichbar. Den Stand findest du mit /einrichtung."); break;
+      }
+      case "einrichtung_automatik": {
+        own(member); const active = i.options.getBoolean("aktiv", true);
+        store.setting("auto_setup_paused", active ? "false" : "true"); store.audit(member.id, "auto_setup_mode", active ? "enabled" : "paused");
+        if (active) { lastSetupAttempt = 0; void runSetup(); }
+        else setupState = setupRunning ? "pausing" : "paused";
+        await answer(i, active ? "Die automatische GoR-Pflege ist aktiviert. /einrichtung zeigt den Stand." : "Die automatische Pflege ist pausiert. Ein bereits laufender Einrichtungsschritt wird noch abgeschlossen."); break;
+      }
+      case "einrichtung_zuordnen": await serial(async () => {
+        own(member); const key = i.options.getString("schluessel", true), id = i.options.getString("id", true);
+        try { await adoptSetupResource({ guild, application: APPLICATION, target: GUILD, maps: setupMaps, storage: store }, key, id); }
+        catch (error) { throw new UserError(SETUP_ISSUES[issueCode(error)] || SETUP_ISSUES.unexpected_error); }
+        store.audit(member.id, "auto_setup_bind", key); lastSetupAttempt = 0;
+        await answer(i, `Vorhandenen GoR-Eintrag bestätigt: ${key}. Die Automatik verwendet künftig diese ID.`);
+      }); break;
+      case "einrichtung_freigeben": await serial(async () => {
+        own(member); const key = i.options.getString("schluessel", true);
+        if (!resourceKnown(key) || !i.options.getBoolean("nicht_vorhanden", true)) throw new UserError("Eine neue Anlage darf erst nach der Prüfung freigegeben werden, dass der frühere Eintrag nicht existiert.");
+        try { new SetupJournal(store.db).clearAbsent(key); } catch { throw new UserError("Für diesen Schlüssel gibt es keine unklare Anlage."); }
+        store.audit(member.id, "auto_setup_release", key); lastSetupAttempt = 0;
+        await answer(i, `Die sicher nicht erfolgte Anlage ist freigegeben: ${key}. Die Automatik kann sie beim nächsten Lauf ergänzen.`);
       }); break;
       case "panel_zuordnen": await serial(async () => {
         own(member); const id = i.options.getString("nachricht", true);
@@ -854,6 +912,24 @@ export async function main(options: { createClient?: () => Client; environment?:
     } catch (error) { commandsReady = false; logFailure("commands_registration_failed_retrying", error); }
     finally { commandsSyncing = false; }
   }
+  async function runSetup(force = false) {
+    if (stopped || !verified || !client.isReady() || setupRunning) return;
+    if (settings.storage === "temporary") { setupState = "storage_required"; return; }
+    if (!force && (!setupEnabled || store.setting("auto_setup_paused") === "true")) { setupState = "paused"; return; }
+    const delay = setupReport?.issues.some(item => item.code === "lease_busy") ? 60_000 : setupReport?.issues.length ? 300_000 : 900_000;
+    if (!force && Date.now() - lastSetupAttempt < delay) return;
+    setupRunning = true; setupState = "running"; lastSetupAttempt = Date.now(); safeLog("auto_setup_started");
+    try {
+      setupReport = await serial(async () => (options.setupRunner || reconcileServer)({
+        guild: await client.guilds.fetch(GUILD), application: APPLICATION, target: GUILD, maps: setupMaps, storage: store,
+        stopped: () => stopped || (!force && store.setting("auto_setup_paused") === "true"),
+      }));
+      setupState = !force && store.setting("auto_setup_paused") === "true" ? "paused" : setupReport.status;
+      store.setting("auto_setup_report", JSON.stringify(setupReport));
+      console.log(JSON.stringify({ at: new Date().toISOString(), event: "auto_setup_finished", created: setupReport.created, updated: setupReport.updated, issues: setupReport.issues.length }));
+    } catch (error) { setupState = "attention"; console.error(JSON.stringify({ at: new Date().toISOString(), event: "auto_setup_failed", code: issueCode(error) })); }
+    finally { setupRunning = false; }
+  }
   client.on(Events.ClientReady, () => {
     safeLog("discord_gateway_ready");
     void serial(async () => {
@@ -871,6 +947,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       client.user!.setPresence({ activities: [{ name: "/hilfe · GoR Network", type: ActivityType.Watching }], status: "online" });
       safeLog("discord_ready");
       void registerCommands();
+      void runSetup();
     }).catch(error => { logFailure("startup_check_failed", error); void shutdown(1); });
   });
   const token = readToken(env);

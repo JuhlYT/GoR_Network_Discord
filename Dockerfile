@@ -10,7 +10,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=dependencies --chown=bun:bun /app/node_modules ./node_modules
-COPY --chown=bun:bun package.json gor_network.ts storage_path.ts community_ui.ts ./
+COPY --chown=bun:bun package.json gor_network.ts storage_path.ts community_ui.ts auto_setup.ts setup_journal.ts setup_permissions.ts setup_native.ts server_blueprint.ts server_content.ts ./
 COPY --chmod=755 scripts/docker-entrypoint.sh /usr/local/bin/gor-entrypoint
 ENV NODE_ENV=production GOR_DATA_DIR=/data
 EXPOSE 8080

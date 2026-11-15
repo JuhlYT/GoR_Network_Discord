@@ -68,3 +68,5 @@ Bei SIGTERM werden laufende verwaltete Änderungen abgewartet und der Dienst sau
 Projektanfragen ermöglichen Gespräche und eine Pilotphase für weitere Spiele und Server. Aufnahme, Partnerschaft, Fusion, Vertragszusagen und Finanzentscheidungen werden von der Leitung getroffen.
 
 Die Abnahme von Community-Menü, privaten Karten und Projektphasen steht in [COMMUNITY.md](COMMUNITY.md).
+
+Seit Version 4.3.0 startet die automatische Einrichtung nach der bestätigten Gateway-Verbindung. Die HTTP-Gesundheitsantwort nennt ihren Zustand separat in `setup`. Ein offener Einrichtungsschritt macht eine bestehende Discord-Verbindung nicht künstlich ungesund. Die Tabellen `managed_resources`, `setup_lease` und `setup_snapshots` speichern Zuordnungen, eine zeitlich begrenzte Einrichtungssperre und bis zu fünf eigene Konfigurationsstände je Eintrag. Die bestehende Sicherung enthält diese Tabellen ebenfalls. Native Regelbestätigung wird nicht automatisch als erledigt ausgegeben. Details, Pausierung und Wiederaufnahme stehen in [AUTOMATIK.md](AUTOMATIK.md).
