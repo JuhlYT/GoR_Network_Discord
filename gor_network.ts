@@ -1,6 +1,6 @@
-/** GoR Network bot, v4.1.0. Repository and container deployment (Bun).
+/** GoR Network bot, v4.1.1. Repository and container deployment (Bun).
  * No tokens, message-content intent, blanket command deletion or automatic server rebuild.
- * Requires one replica and a persistent volume at GOR_DATA_DIR=/data.
+ * A persistent volume is required for case and publication management, not for connecting.
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync } from "node:fs";
@@ -13,7 +13,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.1.0";
+export const VERSION = "4.1.1";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -65,7 +65,46 @@ const ANNOUNCE_TARGETS = { neuigkeiten: "Network-Neuigkeiten", termine: "Communi
 const MENTIONS = { parse: [] as [], repliedUser: false };
 const COLOR = 0x21cce2;
 const now = () => Date.now() / 1000;
-export class UserError extends Error {}
+export class UserError extends Error {
+  constructor(message: string, public readonly code = "configuration_error") { super(message); }
+}
+export type RuntimeEnv = Record<string, string | undefined>;
+export const TOKEN_KEYS = ["GOR_DISCORD_BOT_TOKEN", "DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "BOT_TOKEN", "TOKEN"] as const;
+export function readToken(env: RuntimeEnv) {
+  for (const key of TOKEN_KEYS) {
+    let value = env[key]?.trim();
+    if (!value) continue;
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1).trim();
+    value = value.replace(/^Bot\s+/i, "").trim();
+    if (value) return { value, key };
+  }
+  return null;
+}
+export function runtimeSettings(env: RuntimeEnv) {
+  const volume = env.RAILWAY_VOLUME_MOUNT_PATH?.trim();
+  const railway = !!env.RAILWAY_ENVIRONMENT_ID;
+  const storage = volume ? "persistent" : railway ? "temporary" : "local";
+  const directory = volume || env.GOR_DATA_DIR?.trim() || "./betrieb";
+  const supportEnabled = storage !== "temporary" && !["false", "0", "off", "no"].includes((env.GOR_SUPPORT_ENABLED ?? "true").trim().toLowerCase());
+  return { directory, storage, supportEnabled };
+}
+const TEMPORARY_ACTIONS = new Set(["hilfe", "status", "rollen", "unterstuetzen", "serverpruefen", "gor:roles:v4"]);
+export function requireStorage(settings: ReturnType<typeof runtimeSettings>, action: string) {
+  if (settings.storage === "temporary" && !TEMPORARY_ACTIONS.has(action))
+    throw new UserError("Der Bot ist verbunden. Für private Fälle und Veröffentlichungen muss die Leitung noch ein dauerhaftes Datenvolume anbinden. /status zeigt den Betriebsstand.", "storage_required");
+}
+export function errorDiagnostic(error: any) {
+  const code = error?.code ?? error?.cause?.code;
+  if (code === "wrong_application") return { code, hint: "Der Token gehört nicht zur vorgesehenen GoR-Anwendung. Den richtigen Bot-Token verwenden." };
+  if (code === "wrong_guild" || code === 10004 || code === 50001) return { code: "guild_access_missing", hint: "Der Bot benötigt Zugriff auf den vorgesehenen GoR-Server. Einladung und applications.commands prüfen." };
+  if (code === 50013) return { code: "permissions_missing", hint: "Discord verweigert einzelne Rechte. Botrolle, Kanalrechte und Befehlsfreigabe prüfen." };
+  if (code === 50035) return { code: "command_definition_rejected", hint: "Discord hat eine Befehlsdefinition abgelehnt; der Bot bleibt verbunden." };
+  if (code === "TokenInvalid" || code === "TOKEN_INVALID" || code === 4004 || error?.status === 401)
+    return { code: "token_invalid", hint: "Discord lehnt den Bot-Token ab. Den Laufzeitwert im Hosting prüfen." };
+  if (["ENOTFOUND", "ENETUNREACH", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(code))
+    return { code: "network_unavailable", hint: "Discord ist vom Dienst aus nicht erreichbar. Netzwerkzugriff und Trial-Einschränkungen prüfen." };
+  return { code: "startup_step_failed", hint: "Ein Startschritt ist fehlgeschlagen. Die davor ausgegebene Startphase prüfen; Zugangsdaten wurden nicht protokolliert." };
+}
 type Case = { id: number; guild_id: string; opener_id: string; kind: string; channel_id: string | null;
   assignee_id: string | null; status: string; created: number; updated: number };
 type Operation = { id: string; kind: string; actor_id: string; target: string; payload: string;
@@ -278,6 +317,10 @@ function safeLog(event: string, code?: unknown) {
   // Never serialize Error objects: Discord errors may contain request bodies or credentials.
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...(typeof code === "number" ? { code } : {}) }));
 }
+function logFailure(event: string, error: unknown) {
+  // Only fixed diagnostic strings are logged, never an Error object or request body.
+  console.error(JSON.stringify({ at: new Date().toISOString(), event, ...errorDiagnostic(error) }));
+}
 function own(member: GuildMember) {
   if (member.id !== member.guild.ownerId) throw new UserError("Diese Funktion führt der Serverinhaber aus.");
 }
@@ -285,9 +328,20 @@ function leadership(member: GuildMember) {
   if (member.id !== member.guild.ownerId && !["networkleitung", "communityleitung"].some(k => member.roles.cache.has(ROLES[k])))
     throw new UserError("Für diese Funktion fehlt die Zuständigkeit in der Networkleitung.");
 }
-export function validateIdentity(userId: string | undefined, appId: string | undefined, guildId: string, admin: boolean) {
-  if (userId !== APPLICATION || appId !== APPLICATION || guildId !== GUILD) throw new UserError("Anwendung oder Zielserver passen nicht zu GoR.");
-  if (admin) throw new UserError("Bitte das Administratorrecht des Bots durch die benötigten Einzelrechte ersetzen.");
+export function validateIdentity(userId: string | undefined, appId: string | undefined, guildId: string, _admin?: boolean) {
+  if (userId !== APPLICATION || appId !== APPLICATION) throw new UserError("Die Anwendung passt nicht zum GoR Bot.", "wrong_application");
+  if (guildId !== GUILD) throw new UserError("Dieser Server passt nicht zum GoR Network.", "wrong_guild");
+}
+export async function syncGuildCommands(guild: Guild) {
+  const current = await guild.commands.fetch();
+  for (const definition of commandDefinitions()) {
+    const existing = current.find(c => c.name === definition.name && c.type === 1);
+    if (!existing) await guild.commands.create(definition);
+    else if (commandShape(existing.toJSON()) !== commandShape(definition)) await guild.commands.edit(existing.id, definition);
+  }
+  const confirmed = await guild.commands.fetch();
+  if (commandDefinitions().some(d => !confirmed.some(c => c.type === 1 && commandShape(c.toJSON()) === commandShape(d))))
+    throw new UserError("Die Befehlsregistrierung ist noch nicht bestätigt.");
 }
 async function textChannel(guild: Guild, id: string) {
   const channel = await guild.channels.fetch(id, { force: true });
@@ -313,25 +367,30 @@ function caseModal(kind: string) {
   );
 }
 
-export function healthResponse(path: string, ready: boolean, dbOk: boolean, state: string) {
+export function healthResponse(path: string, ready: boolean, dbOk: boolean, state: string, details: Record<string, string> = {}) {
   const status = path === "/live" ? 200 : (path === "/health" || path === "/ready") ? (ready && dbOk ? 200 : 503) : 404;
-  return Response.json({ service: "gor-network", version: VERSION, status: status === 404 ? "not_found" : path === "/live" ? "alive" : ready && dbOk ? "ready" : state },
+  return Response.json({ service: "gor-network", version: VERSION, status: status === 404 ? "not_found" : path === "/live" ? "alive" : ready && dbOk ? "ready" : state, ...details },
     { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function main() {
+export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv } = {}) {
   process.umask(0o077);
-  const directory = Bun.env.GOR_DATA_DIR || Bun.env.RAILWAY_VOLUME_MOUNT_PATH || "./betrieb";
-  if (Bun.env.RAILWAY_ENVIRONMENT_ID && (!Bun.env.RAILWAY_VOLUME_MOUNT_PATH || resolve(directory) !== resolve(Bun.env.RAILWAY_VOLUME_MOUNT_PATH)))
-    throw new UserError("Ein dauerhaftes Volume am konfigurierten Datenverzeichnis fehlt.");
-  const store = new Store(directory);
-  const client = new Client({ intents: [GatewayIntentBits.Guilds], allowedMentions: MENTIONS,
+  const env = options.environment || Bun.env;
+  const settings = runtimeSettings(env);
+  if (settings.storage === "temporary") safeLog("storage_temporary_support_paused");
+  if (env.RAILWAY_VOLUME_MOUNT_PATH && env.GOR_DATA_DIR && resolve(env.RAILWAY_VOLUME_MOUNT_PATH) !== resolve(env.GOR_DATA_DIR))
+    safeLog("data_directory_uses_attached_volume");
+  safeLog("database_opening");
+  const store = new Store(settings.directory);
+  const client = options.createClient?.() || new Client({ intents: [GatewayIntentBits.Guilds], allowedMentions: MENTIONS,
     rest: { retries: 0, timeout: 15_000 } });
-  let ready = false, state = "starting", stopped = false, lastHealthy = Date.now();
+  let ready = false, verified = false, commandsReady = false, commandsSyncing = false;
+  let state = "starting", stopped = false, lastHealthy = Date.now(), administratorReported = false;
   let maintenance: ReturnType<typeof setTimeout> | undefined;
-  const server = Bun.serve({ hostname: "0.0.0.0", port: Number(Bun.env.PORT || 8080),
+  const server = Bun.serve({ hostname: "0.0.0.0", port: Number(env.PORT || 8080),
     fetch(request) { let dbOk = false; try { dbOk = store.health(); } catch {}
-      return healthResponse(new URL(request.url).pathname, ready && client.isReady(), dbOk, state); } });
+      return healthResponse(new URL(request.url).pathname, ready && client.isReady(), dbOk, state,
+        { storage: settings.storage, commands: commandsReady ? "registered" : "pending" }); } });
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T,>(fn: () => Promise<T>) => {
     const task = queue.then(fn); queue = task.catch(() => {}); return task;
@@ -347,12 +406,15 @@ export async function main() {
   process.on("unhandledRejection", () => { safeLog("unhandled_rejection"); void shutdown(1); });
   client.on(Events.Error, () => safeLog("discord_connection_error"));
   client.on(Events.ShardDisconnect, () => { ready = false; state = "reconnecting"; });
-  client.on(Events.ShardResume, () => { if (state === "reconnecting") { ready = true; state = "ready"; } });
+  client.on(Events.ShardResume, () => { if (state === "reconnecting") { ready = verified; state = verified ? "ready" : "checking"; } });
   client.on(Events.ShardError, () => safeLog("discord_gateway_error"));
   function maintain() {
     if (stopped) return;
     try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); }
-    if (ready && client.isReady()) lastHealthy = Date.now();
+    if (client.isReady()) {
+      lastHealthy = Date.now();
+      if (verified && !commandsReady) void registerCommands();
+    }
     else if (Date.now() - lastHealthy > 300_000) { safeLog("connection_watchdog_restart"); void shutdown(1); return; }
     maintenance = setTimeout(maintain, 60_000);
     maintenance.unref();
@@ -366,13 +428,17 @@ export async function main() {
   }
   async function assertBot(guild: Guild) {
     const me = await guild.members.fetchMe({ force: true });
-    validateIdentity(client.user?.id, client.application?.id, guild.id, me.permissions.has(P.Administrator)); return me;
+    validateIdentity(client.user?.id, client.application?.id, guild.id);
+    if (me.permissions.has(P.Administrator) && !administratorReported) {
+      administratorReported = true; safeLog("administrator_permission_detected_use_individual_permissions");
+    }
+    return me;
   }
   function canHandle(c: Case, member: GuildMember) {
     return eligible(c.kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId);
   }
   async function createCase(i: any, member: GuildMember, kind: string) {
-    if (Bun.env.GOR_SUPPORT_ENABLED !== "true") throw new UserError("Der private Support ist noch nicht aktiviert. Bitte kontaktiere die Networkleitung.");
+    if (!settings.supportEnabled) throw new UserError("Der private Support ist noch nicht aktiviert. Bitte kontaktiere die Networkleitung.");
     const guild = member.guild, me = await assertBot(guild);
     const category = await guild.channels.fetch(CATEGORIES.hilfe, { force: true });
     const needed = [P.ManageChannels, P.ManageRoles, P.ViewChannel, P.SendMessages, P.ReadMessageHistory];
@@ -436,6 +502,10 @@ export async function main() {
     // Responding with a modal must be the initial interaction response.
     if (!ready || !client.isReady()) throw new UserError("Der Bot stellt die Verbindung gerade wieder her.");
     if (i.member?.pending) throw new UserError("Bitte bestätige zuerst die Serverregeln.");
+    const action = i.isChatInputCommand() ? i.commandName : "customId" in i ? i.customId : "unknown";
+    requireStorage(settings, action);
+    if (!settings.supportEnabled && ["support", "projektanfrage", "gor:support:v3", "gor:projekt:v3", "gor:kind:v4"].includes(action))
+      throw new UserError("Der private Support ist noch nicht aktiviert. Bitte kontaktiere die Networkleitung.");
     if ((i.isButton() && i.customId === "gor:projekt:v3") || (i.isChatInputCommand() && i.commandName === "projektanfrage")) {
       await i.showModal(caseModal("projekt")); return;
     }
@@ -475,7 +545,7 @@ export async function main() {
     if (!i.isChatInputCommand()) throw new UserError("Diese Auswahl ist nicht mehr gültig. Bitte den zugehörigen Befehl erneut öffnen.");
     switch (i.commandName) {
       case "hilfe": await answer(i, "**Willkommen bei GoR Network**\nSpiele und Projekte: <#" + CHANNELS.projekte + ">\nMitspieler: <#" + CHANNELS.mitspielersuche + ">\nHilfe: /support · Eigene Rollen: /rollen\nEin Projekt für das Network vorstellen: /projektanfrage\nDu gehörst auch ohne Zahlung zu GoR."); break;
-      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nPrivater Support: ${Bun.env.GOR_SUPPORT_ENABLED === "true" ? "aktiv" : "noch nicht freigeschaltet"}\nFunktionen: Support, Projektanfragen, Rollenwahl und Ankündigungen mit Vorschau.\nSicherungen: ${store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
+      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commandsReady ? "bestätigt" : "wird erneut versucht"}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nRollenwahl und Orientierung sind verfügbar.\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
       case "unterstuetzen": await answer(i, `GoR wird freiwillig unterstützt. Informationen: <#${CHANNELS["gor-unterstuetzen"]}>\nKosten und Stand: <#${CHANNELS["kosten-und-stand"]}>\nhttps://gor-shop.de\nDu kannst auch ohne Zahlung vollständig zur Community gehören. Für Zahlungsfragen nutze /support.`); break;
       case "rollen": {
         const select = new StringSelectMenuBuilder().setCustomId("gor:roles:v4").setPlaceholder("Deine Auswahl · leer = keine dieser Rollen")
@@ -559,7 +629,7 @@ export async function main() {
           `Regelprüfung: ${guild.features.includes("MEMBER_VERIFICATION_GATE_ENABLED") ? "von Discord bestätigt" : "nicht bestätigt"}`,
           `Onboarding: ${(guild.features as string[]).includes("GUILD_ONBOARDING_EVER_ENABLED") ? "wurde eingerichtet; aktuellen Ablauf manuell prüfen" : "nicht bestätigt"}`,
           `Bot: ${[P.ManageChannels, P.ManageRoles, P.ViewChannel, P.SendMessages, P.ReadMessageHistory].every(p => me.permissions.has(p)) ? "Grundrechte vorhanden" : "einzelne Grundrechte fehlen"}`,
-          `Offene oder zu prüfende Fälle: ${store.queue().length}`, `Sicherungen: ${store.backupHealthy ? "lokal verfügbar" : "prüfen"}`];
+          `Offene oder zu prüfende Fälle: ${settings.storage === "temporary" ? "Fallverwaltung wartet auf das Datenvolume" : store.queue().length}`, `Sicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung fehlt" : store.backupHealthy ? "lokal verfügbar" : "prüfen"}`];
         if (missingRoles.length) checks.push("Fehlende Rollen: " + missingRoles.join(", "));
         if (missingChannels.length) checks.push("Fehlende Kanäle: " + missingChannels.join(", "));
         checks.push("AutoMod, Kanalüberschreibungen und Rollenrangfolge werden durch diese Übersicht nicht als fehlerfrei bestätigt.");
@@ -595,33 +665,40 @@ export async function main() {
       } catch { safeLog("interaction_response_failed"); }
     }).finally(() => { try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); } });
   });
+  async function registerCommands() {
+    if (commandsSyncing || stopped || !verified || !client.isReady()) return;
+    commandsSyncing = true;
+    try {
+      await syncGuildCommands(await client.guilds.fetch(GUILD));
+      commandsReady = true; safeLog("commands_registered");
+    } catch (error) { commandsReady = false; logFailure("commands_registration_failed_retrying", error); }
+    finally { commandsSyncing = false; }
+  }
   client.on(Events.ClientReady, () => {
     void serial(async () => {
       ready = false; state = "checking";
       await client.application!.fetch();
       const guild = await client.guilds.fetch(GUILD); await assertBot(guild);
-      const current = await guild.commands.fetch();
-      for (const definition of commandDefinitions()) {
-        const existing = current.find(c => c.name === definition.name && c.type === 1);
-        const desired = commandShape(definition);
-        if (!existing) await guild.commands.create(definition);
-        else if (commandShape(existing.toJSON()) !== desired) await guild.commands.edit(existing.id, definition);
-      }
-      // Preserve all other application commands; a bulk overwrite would silently delete them.
-      const confirmed = await guild.commands.fetch();
-      if (commandDefinitions().some(d => !confirmed.some(c => c.type === 1 && commandShape(c.toJSON()) === commandShape(d)))) throw new UserError("Die Befehlsregistrierung ist noch nicht bestätigt.");
-      store.backup(); ready = true; state = "ready"; lastHealthy = Date.now();
+      // Being online must not depend on optional storage, administrator warnings or command sync.
+      try { store.backup(); } catch { safeLog("backup_failed"); }
+      verified = true; ready = true; state = "ready"; lastHealthy = Date.now();
       client.user!.setPresence({ activities: [{ name: "/hilfe · GoR Network", type: ActivityType.Watching }], status: "online" });
       safeLog("discord_ready");
-    }).catch(() => { safeLog("startup_check_failed"); void shutdown(1); });
+      void registerCommands();
+    }).catch(error => { logFailure("startup_check_failed", error); void shutdown(1); });
   });
-  const token = Bun.env.GOR_DISCORD_BOT_TOKEN;
-  if (!token) { state = "token_missing"; safeLog("configuration_token_missing"); return; }
+  const token = readToken(env);
+  if (!token) {
+    state = "token_missing";
+    console.error(JSON.stringify({ at: new Date().toISOString(), event: "configuration_token_missing", hint: "Bot-Token als GOR_DISCORD_BOT_TOKEN, DISCORD_TOKEN, DISCORD_BOT_TOKEN, BOT_TOKEN oder TOKEN hinterlegen." }));
+    return;
+  }
   maintenance = setTimeout(maintain, 60_000); maintenance.unref();
   // Never log the token or a Discord HTTP request/response body.
-  try { await client.login(token); } catch { safeLog("discord_login_failed"); await shutdown(1); }
+  safeLog("discord_connecting");
+  try { await client.login(token.value); } catch (error) { logFailure("discord_login_failed", error); await shutdown(1); }
 }
 
 if (import.meta.main) {
-  try { await main(); } catch (e) { safeLog("service_start_failed"); process.exitCode = 1; }
+  try { await main(); } catch (error) { logFailure("service_start_failed", error); process.exitCode = 1; }
 }

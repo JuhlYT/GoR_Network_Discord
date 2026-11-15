@@ -3,8 +3,12 @@ set -eu
 umask 077
 
 # Railway mounts volumes as root. Prepare only this bot's known files, then drop root.
-data_dir=${GOR_DATA_DIR:-/data}
-if [ "$data_dir" != /data ]; then echo 'Container data directory must be /data.' >&2; exit 1; fi
+data_dir=${RAILWAY_VOLUME_MOUNT_PATH:-${GOR_DATA_DIR:-/data}}
+case "$data_dir" in
+  /data|/app/data|/app/betrieb) ;;
+  *) echo 'Data volume must be mounted at /data, /app/data or /app/betrieb.' >&2; exit 1 ;;
+esac
+export GOR_DATA_DIR="$data_dir"
 if [ "$(id -u)" = 0 ]; then
   if [ -L "$data_dir" ]; then echo 'Data directory must not be a symbolic link.' >&2; exit 1; fi
   mkdir -p "$data_dir"

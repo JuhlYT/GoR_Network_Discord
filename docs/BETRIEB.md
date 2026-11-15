@@ -26,7 +26,9 @@ Ankündigungen bleiben 15 Minuten als private Vorschau verfügbar. Nur ihr Verfa
 
 ## Daten und Sicherungen
 
-`/data/support.sqlite` enthält Metadaten, Einstellungen, Interaktionskennungen und vorbereitete Veröffentlichungstexte. SQLite verwendet WAL und vollständige Synchronisierung. Beim Start läuft eine Integritätsprüfung. Ein fehlendes Railway-Volume führt zum Abbruch.
+`/data/support.sqlite` enthält Metadaten, Einstellungen, Interaktionskennungen und vorbereitete Veröffentlichungstexte. SQLite verwendet WAL und vollständige Synchronisierung. Beim Start läuft eine Integritätsprüfung. Ein fehlendes Railway-Volume führt seit v4.1.1 zu einem eingeschränkten Betrieb statt zu einem Verbindungsabbruch: Orientierung, Status und Rollenwahl funktionieren weiter; Fallverwaltung, Veröffentlichungen, Bedienfeldverwaltung und dauerhafte Sicherungen bleiben pausiert. Ein temporäres Verzeichnis wird nicht als dauerhafte Speicherung ausgegeben.
+
+Ein angehängtes Volume hat Vorrang vor `GOR_DATA_DIR`. Der Container unterstützt `/data`, `/app/data` und `/app/betrieb`. Nach dem Anbinden des Volumes und einem Neustart wird der vollständige Betrieb verfügbar. `GOR_SUPPORT_ENABLED=false` pausiert den privaten Support weiterhin ausdrücklich; ohne diesen Schalter ist Support mit dauerhafter Datenhaltung aktiviert.
 
 Konsistente Sicherungen liegen unter `/data/backups`. Ein aktiver Dienst sichert beim Start und danach spätestens beim nächsten minütlichen Wartungslauf, sobald 24 Stunden vergangen sind. `/backup` erstellt einen zusätzlichen lokalen Stand. Aufbewahrt werden je sieben automatische und manuelle Sicherungen. Diese Kopien auf demselben Volume ersetzen keine unabhängige Sicherung gegen den Verlust des gesamten Volumes.
 
@@ -39,10 +41,12 @@ Beim Wechsel von der früheren Python-Fassung zuerst deren Prozess stoppen, eine
 | Route | Bedeutung |
 | --- | --- |
 | `/live` | HTTP-Prozess läuft; bestätigt keine Discord-Verbindung |
-| `/health`, `/ready` | 200 nur bei bestätigter Discord-Bereitschaft und erreichbarer Datenbank, sonst 503 |
+| `/health`, `/ready` | 200 bei bestätigter Discord-Bereitschaft und erreichbarer Datenbank, sonst 503; `storage` zeigt separat `persistent`, `temporary` oder `local` |
 | andere Pfade | 404; keine Datenbankdownloads und keine HTTP-Verwaltung |
 
-Die HTTP-Antworten enthalten Dienstname, Version und Status. Fehlerobjekte und HTTP-Anfrageinhalte werden nicht ausgegeben. Der Bot verbindet sich über discord.js wieder. Bleibt er länger als fünf Minuten ohne bestätigte Verbindung, beendet der Wächter den Prozess mit Fehlerstatus; die Railway-Neustartregel übernimmt. Nach zehn fehlgeschlagenen Neustarts muss die Ursache geprüft werden.
+Die HTTP-Antworten enthalten Dienstname, Version, Verbindungsstatus, Datenmodus und Stand der Befehlsregistrierung. Fehlerobjekte und HTTP-Anfrageinhalte werden nicht ausgegeben. `discord_ready` bestätigt die Verbindung, `commands_registered` die Registrierung. Ein Registrierungsfehler wird mit einem festen Diagnosecode gemeldet und erneut versucht, ohne die Verbindung zu beenden. Bestehendes Administratorrecht wird als Hinweis protokolliert; es umgeht keine Zuständigkeit oder Zielserverprüfung.
+
+Der Bot verbindet sich über discord.js wieder. Bleibt er länger als fünf Minuten ohne Gateway-Verbindung, beendet der Wächter den Prozess mit Fehlerstatus; die Railway-Neustartregel übernimmt. Nach zehn fehlgeschlagenen Neustarts muss die Ursache geprüft werden.
 
 Bei SIGTERM werden laufende verwaltete Änderungen abgewartet und der Dienst sauber beendet. Eine feste Grenze von zwölf Sekunden verhindert ein endloses Hängen. Das dauerhafte Volume und die eine Replik verhindern parallele aktive Datenbankinstanzen bei einer Bereitstellung.
 

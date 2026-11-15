@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ApplicationCommand, Client } from "discord.js";
 import { Store, GUILD, APPLICATION, ROLES, eligible, roleKeys, mayClose, privacyCheck,
-  UserError, validateIdentity, commandDefinitions, healthResponse, sameAnnouncement, announcementEmbed, commandShape } from "./gor_network";
+  UserError, validateIdentity, commandDefinitions, healthResponse, sameAnnouncement, announcementEmbed, commandShape,
+  readToken, runtimeSettings, requireStorage, errorDiagnostic } from "./gor_network";
 
 const locations: string[] = [], stores: Store[] = [];
 function location() { const p = mkdtempSync(join(tmpdir(), "gor-bot-")); locations.push(p); return p; }
@@ -79,10 +80,50 @@ describe("Zuständigkeiten und Zugriffe", () => {
     expect(() => privacyCheck([...valid, { id: "staffrole", type: 0, allow: view, deny: 0n }], c, APPLICATION)).toThrow();
     expect(() => privacyCheck([...valid, { id: "other", type: 1, allow: view, deny: 0n }], c, APPLICATION)).toThrow();
   });
-  test("eine falsche Anwendung oder ein Administratorbot wird abgewiesen", () => {
+  test("eine falsche Anwendung wird abgewiesen, bestehendes Administratorrecht beendet keine Verbindung", () => {
     expect(() => validateIdentity(APPLICATION, APPLICATION, GUILD, false)).not.toThrow();
-    for (const args of [["wrong", APPLICATION, GUILD, false], [APPLICATION, "wrong", GUILD, false], [APPLICATION, APPLICATION, "wrong", false], [APPLICATION, APPLICATION, GUILD, true]])
+    expect(() => validateIdentity(APPLICATION, APPLICATION, GUILD, true)).not.toThrow();
+    for (const args of [["wrong", APPLICATION, GUILD, false], [APPLICATION, "wrong", GUILD, false], [APPLICATION, APPLICATION, "wrong", false]])
       expect(() => validateIdentity(...args as [string, string, string, boolean])).toThrow();
+  });
+});
+
+describe("Railway-Startkonfiguration", () => {
+  test("übliche Tokenvariablen werden ohne Namensabhängigkeit erkannt", () => {
+    for (const key of ["GOR_DISCORD_BOT_TOKEN", "DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "BOT_TOKEN", "TOKEN"] as const)
+      expect(readToken({ [key]: "fixture-token" })).toEqual({ key, value: "fixture-token" });
+  });
+  test("der vorhandene GoR-Token hat Vorrang; leere Platzhalter blockieren keinen Alias", () => {
+    expect(readToken({ GOR_DISCORD_BOT_TOKEN: "primary", DISCORD_TOKEN: "other" })?.value).toBe("primary");
+    expect(readToken({ GOR_DISCORD_BOT_TOKEN: "   ", DISCORD_TOKEN: "alias" })?.value).toBe("alias");
+    expect(readToken({})).toBeNull();
+  });
+  test("ein versehentlicher Bot-Präfix und äußere Anführungszeichen werden entfernt", () => {
+    expect(readToken({ TOKEN: ' "Bot fixture-token" ' })?.value).toBe("fixture-token");
+  });
+  test("Railway ohne Volume bleibt startfähig, pausiert aber dauerhafte Fälle", () => {
+    const config = runtimeSettings({ RAILWAY_ENVIRONMENT_ID: "fixture", GOR_DATA_DIR: "/data" });
+    expect(config).toMatchObject({ storage: "temporary", directory: "/data", supportEnabled: false });
+    expect(() => requireStorage(config, "status")).not.toThrow();
+    expect(() => requireStorage(config, "rollen")).not.toThrow();
+    expect(() => requireStorage(config, "gor:roles:v4")).not.toThrow();
+    for (const action of ["support", "projektanfrage", "supportpanel", "gor:case:allgemein", "ankuendigung", "gor:publish:fixture", "backup", "faelle"])
+      expect(() => requireStorage(config, action)).toThrow(UserError);
+  });
+  test("das tatsächliche Railway-Volume hat Vorrang vor einem veralteten Datenpfad", () => {
+    expect(runtimeSettings({ RAILWAY_ENVIRONMENT_ID: "fixture", RAILWAY_VOLUME_MOUNT_PATH: "/app/data", GOR_DATA_DIR: "/data" }))
+      .toMatchObject({ storage: "persistent", directory: "/app/data", supportEnabled: true });
+  });
+  test("Support kann auf einem persistenten Dienst ausdrücklich pausiert werden", () => {
+    for (const value of ["false", "FALSE", "0", "off", "no"])
+      expect(runtimeSettings({ RAILWAY_VOLUME_MOUNT_PATH: "/data", GOR_SUPPORT_ENABLED: value }).supportEnabled).toBe(false);
+  });
+  test("Startdiagnosen enthalten keine fremden Fehlermeldungen oder Zugangsdaten", () => {
+    const raw = { code: 50013, message: "fixture-secret", requestBody: { token: "fixture-secret" } };
+    expect(errorDiagnostic(raw).code).toBe("permissions_missing");
+    expect(JSON.stringify(errorDiagnostic(raw))).not.toContain("fixture-secret");
+    expect(JSON.stringify(errorDiagnostic({ message: "fixture-secret" }))).not.toContain("fixture-secret");
+    expect(errorDiagnostic({ status: 401 }).code).toBe("token_invalid");
   });
 });
 

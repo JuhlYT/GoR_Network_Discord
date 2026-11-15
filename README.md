@@ -2,6 +2,18 @@
 
 Privater Support, Projektaufnahme, eigene Spielerrollen und Ankündigungen für **GoR Network**. Die Anwendung läuft als dauerhaft verbundener Bot mit Bun und discord.js; die Bot-Datenbank bleibt auf einem eigenen Volume erhalten.
 
+## Reparatur v4.1.1
+
+Der Discord-Verbindungsaufbau ist jetzt von zusätzlichen Betriebsprüfungen getrennt:
+
+- Der Token wird als `GOR_DISCORD_BOT_TOKEN`, `DISCORD_TOKEN`, `DISCORD_BOT_TOKEN`, `BOT_TOKEN` oder `TOKEN` erkannt. Ein versehentlicher `Bot `-Präfix und äußere Anführungszeichen werden entfernt. Der Wert wird nie ausgegeben.
+- Ein fehlendes Railway-Volume verhindert die Verbindung nicht mehr. Der Bot läuft dann eingeschränkt mit Orientierung, Status und Rollenwahl. Fälle und Veröffentlichungen bleiben bis zur Anbindung eines dauerhaften Volumes gesperrt.
+- Bestehendes Administratorrecht wird gemeldet, beendet den Bot aber nicht mehr. Die feste Bindung an Anwendung und Server sowie alle Nutzer- und Rollenprüfungen bleiben erhalten.
+- Eine fehlgeschlagene Befehlsregistrierung schaltet den Bot nicht mehr offline. Die Registrierung wird erneut versucht; andere vorhandene Anwendungsbefehle bleiben erhalten.
+- Startfehler erhalten feste Diagnosecodes und Hinweise, ohne Zugangsdaten oder Discord-Anfrageinhalte auszugeben.
+
+Nach einem automatischen GitHub-Deploy startet die neue Fassung über den vorhandenen Dockerfile. Im Laufzeitprotokoll bestätigt `discord_ready` die geprüfte Verbindung; `commands_registered` bestätigt die Befehle.
+
 **Quellcode und Bereitstellungskonfiguration allein bedeuten noch keinen laufenden Bot.** Für den Start werden ein nutzbares Railway-Konto, der Bot-Token als geschützte Variable und die unten beschriebene Abnahme benötigt.
 
 ## Funktionen
@@ -26,13 +38,13 @@ Es werden keine Nachrichtentexte mitgelesen. Supportantworten und Aufnahmeentsch
 
 | Variable | Wert |
 | --- | --- |
-| `GOR_DISCORD_BOT_TOKEN` | Gültiger Bot-Token, ausschließlich als geschützter Laufzeitwert |
+| `GOR_DISCORD_BOT_TOKEN` | Gültiger Bot-Token; alternativ wird eine der oben genannten Tokenvariablen verwendet |
 | `GOR_DATA_DIR` | `/data` |
 | `GOR_SUPPORT_ENABLED` | `true` nach der Vorbereitung der Zuständigkeiten |
 
 `PORT` wird von Railway bereitgestellt. Keine Zugangsdaten in GitHub-Dateien, Issues oder Commitnachrichten speichern.
 
-4. Gesundheitsroute **`/health`**, Startfrist **120 Sekunden**, Neustart bei Fehlern mit **10 Versuchen**, keine parallelen alten und neuen Instanzen und **15 Sekunden** Beendigungsfrist einstellen. Beim eingebauten Containerstart werden die Volume-Rechte vorbereitet; der Bot selbst läuft als Benutzer `bun`.
+4. Gesundheitsroute **`/health`**, Startfrist **120 Sekunden**, Neustart bei Fehlern mit **10 Versuchen**, keine parallelen alten und neuen Instanzen und **15 Sekunden** Beendigungsfrist einstellen. Beim eingebauten Containerstart werden die Volume-Rechte vorbereitet; der Bot selbst läuft als Benutzer `bun`. Unterstützte Mountpfade sind `/data`, `/app/data` und `/app/betrieb`; das tatsächlich angehängte Volume hat Vorrang vor einem veralteten Datenpfad.
 5. Deploymentzustand **SUCCESS**, Protokollereignis **`discord_ready`** und `/health` = **200** bestätigen. Danach die Discord-Abnahme durchführen. Eine öffentliche Domain wird für die Gateway-Verbindung nicht benötigt.
 
 Die entsprechende Railway-Konfiguration steht unter `.railway/railway.ts`. Sie verwendet Infrastructure as Code und verwaltet mit dem Partial `gor-discord-bot` nur die zugehörigen Ressourcen. Vor einem Apply immer den Plan lesen. Der Ausdruck `preserve()` erhält einen bereits geschützten Token; er enthält und erzeugt keinen Zugang. Die Datei ersetzt keine Kontofreischaltung und keine sichere Tokenhinterlegung.
@@ -46,7 +58,7 @@ Diese Befehle erst im zugehörigen GoR-Projekt verwenden. Bei unerwarteten Ände
 
 ## Discord vorbereiten
 
-Der Bot ist fest an die GoR-Anwendung `1571174833025450064` und den Server `1571171516677361704` gebunden. Er benötigt folgende Einzelrechte: Kanäle sehen, Nachrichten senden, Links einbetten, Nachrichtenverlauf lesen, Kanäle verwalten und Rollen verwalten. Die Botrolle muss oberhalb der fünf auswählbaren Rollen liegen. Ein Bot mit Administratorrecht oder eine falsche Anwendung wird beim Start abgewiesen.
+Der Bot ist fest an die GoR-Anwendung `1571174833025450064` und den Server `1571171516677361704` gebunden. Für seine Verwaltungsfunktionen benötigt er folgende Einzelrechte: Kanäle sehen, Nachrichten senden, Links einbetten, Nachrichtenverlauf lesen, Kanäle verwalten und Rollen verwalten. Die Botrolle muss oberhalb der fünf auswählbaren Rollen liegen. Administratorrecht ist nicht erforderlich. Eine falsche Anwendung wird weiterhin abgewiesen.
 
 Privilegierte Gateway-Intents für Mitglieder, Präsenz und Nachrichteninhalte bleiben ausgeschaltet. Die vorhandenen Rollen und Kanäle werden anhand ihrer IDs verwendet. Der Bot erstellt nicht den kompletten Server erneut.
 
@@ -75,7 +87,7 @@ bun run check
 bun run smoke
 ```
 
-Die CI prüft Typen, Fallzustände, Neustarts, Zuständigkeiten, Kanalzugriffe, Doppelklicks, Veröffentlichungskontrolle und Backup-Wiederherstellung. Der Prozesstest benötigt keinen Discord-Token. Er prüft eine echte HTTP-Instanz und SIGTERM; ein Live-Funktionstest auf Discord wird dadurch nicht ersetzt.
+Die CI prüft Typen, Fallzustände, Neustarts, Zuständigkeiten, Kanalzugriffe, Doppelklicks, Veröffentlichungskontrolle und Backup-Wiederherstellung. Prozess- und Containertests prüfen zusätzlich Tokenalias, fehlendes Volume, vorhandenes Administratorrecht und fehlgeschlagene Befehlsregistrierung. Die Discord-Gegenstelle ist dabei ausdrücklich simuliert, Zugangsdaten werden nicht benötigt. HTTP-Prozess, Containerentrypoint, Benutzerwechsel und SIGTERM laufen tatsächlich. Ein Live-Funktionstest auf Discord wird dadurch nicht ersetzt.
 
 Für einen lokalen Start `GOR_DATA_DIR` auf ein eigenes Datenverzeichnis setzen und den Token geschützt in die Prozessumgebung geben. `bun run start` startet den Bot. Eine gleichzeitige zweite Instanz derselben Anwendung vermeiden.
 
