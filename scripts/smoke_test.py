@@ -18,7 +18,7 @@ def run_scenario(root, bun, port, scenario):
         for key in ('GOR_DISCORD_BOT_TOKEN', 'DISCORD_TOKEN', 'DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'TOKEN',
                     'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_VOLUME_MOUNT_PATH', 'GOR_FIXTURE_ADMIN',
                     'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG', 'GOR_FIXTURE_FLOW',
-                    'GOR_AUTO_SETUP', 'GOR_FIXTURE_SETUP'):
+                    'GOR_AUTO_SETUP', 'GOR_FIXTURE_SETUP', 'GOR_FIXTURE_PARTIAL_SYNC'):
             env.pop(key, None)
         env.update(PORT=str(port), GOR_DATA_DIR=data, GOR_SUPPORT_ENABLED='false', GOR_AUTO_SETUP='false')
         mocked = scenario != 'missing-token'
@@ -30,6 +30,8 @@ def run_scenario(root, bun, port, scenario):
                 env['GOR_FIXTURE_ADMIN'] = 'true'
             if scenario == 'command-sync-failure':
                 env['GOR_FIXTURE_SYNC_ERROR'] = 'true'
+            if scenario == 'command-partial-failure':
+                env['GOR_FIXTURE_PARTIAL_SYNC'] = 'true'
             if scenario == 'wrong-application':
                 env['GOR_FIXTURE_WRONG_APP'] = 'true'
             if scenario == 'invalid-token':
@@ -56,6 +58,10 @@ def run_scenario(root, bun, port, scenario):
                     raise AssertionError('Startup failure was not reported and stopped: ' + scenario)
                 if 'discord_ready' in logs:
                     raise AssertionError('A failed startup was reported as ready')
+                if scenario == 'connection-timeout' and '"confirmed":29' not in logs:
+                    raise AssertionError('REST command registration incorrectly waited for Gateway READY')
+                if scenario in ('wrong-application', 'invalid-token') and 'commands_registered' in logs:
+                    raise AssertionError('Commands were registered with an unverified identity')
                 if 'fixture-not-a-real-discord-token' in logs or 'private-fixture-body' in logs:
                     raise AssertionError('Private credential or error body leaked')
                 return {'scenario': scenario, 'discord': 'mocked' if mocked else 'not_contacted',
@@ -80,7 +86,9 @@ def run_scenario(root, bun, port, scenario):
                     headers, body = response.split(b'\r\n\r\n', 1)
                     status = int(headers.split(b' ')[1])
                     setup_ready = scenario not in ('automatic-setup', 'setup-failure') or json.loads(body).get('setup') == ('ready' if scenario == 'automatic-setup' else 'attention')
-                    if (status == wanted and setup_ready) or route != '/health' or time.monotonic() > deadline:
+                    count = '0' if scenario == 'command-sync-failure' else '28' if scenario == 'command-partial-failure' else '29'
+                    commands_ready = json.loads(body).get('command_count') == count
+                    if (status == wanted and setup_ready and commands_ready) or route != '/health' or time.monotonic() > deadline:
                         break
                     time.sleep(.05)
                 if status != wanted:
@@ -89,6 +97,10 @@ def run_scenario(root, bun, port, scenario):
                     health = json.loads(body)
                     if health['status'] != 'ready':
                         raise AssertionError('A connected fixture was not ready')
+                    if health.get('command_count') != count or health.get('command_total') != '29':
+                        raise AssertionError('Command confirmation count was incorrect')
+                    if health['commands'] != ('pending' if scenario in ('command-sync-failure', 'command-partial-failure') else 'registered'):
+                        raise AssertionError('Failed command registration was reported as complete')
                     if scenario == 'railway-no-volume' and health['storage'] != 'temporary':
                         raise AssertionError('Missing volume was reported as persistent')
                 results.append({'route': route, 'status': status})
@@ -106,6 +118,8 @@ def run_scenario(root, bun, port, scenario):
                 raise AssertionError('Administrator warning was not reported')
             if scenario == 'command-sync-failure' and 'commands_registration_failed_retrying' not in logs:
                 raise AssertionError('Failed command registration was not isolated from the connection')
+            if scenario == 'command-partial-failure' and ('commands_unconfirmed' not in logs or '"command":"faq"' not in logs):
+                raise AssertionError('Partial command failure was not identified')
             if scenario.startswith('flow-') and 'fixture_flow_passed:' + scenario.removeprefix('flow-') not in logs:
                 raise AssertionError('The actual interaction handler did not confirm the community flow: ' + scenario)
             if scenario in ('automatic-setup', 'setup-failure') and 'fixture_automatic_setup_called' not in logs:
@@ -132,7 +146,7 @@ def main():
         parser.error('Bun is required; pass --bun /absolute/path/to/bun')
     root = Path(__file__).resolve().parent.parent
     scenarios = ['missing-token', 'invalid-token', 'connection-timeout', 'railway-no-volume', 'railway-admin',
-                 'command-sync-failure', 'wrong-application']
+                 'command-sync-failure', 'command-partial-failure', 'wrong-application']
     scenarios += ['flow-' + flow for flow in ('start', 'public-guide', 'private-guide', 'private-roles', 'own', 'team', 'phase', 'project', 'setup', 'setupstatus')]
     scenarios += ['automatic-setup', 'setup-failure']
     results = [run_scenario(root, args.bun, args.port, scenario) for scenario in scenarios]

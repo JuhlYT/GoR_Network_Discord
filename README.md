@@ -2,6 +2,14 @@
 
 Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverprojekte. GoR verbindet verschiedene Spiele und Communities unter einem Network.
 
+## Fehlende Slash-Befehle: Reparatur in Version 4.3.1
+
+Die 29 Befehle werden direkt über Discords REST-API auf dem GoR-Server registriert, sobald der geschützte Token geladen wurde. Dieser Schritt wartet nicht mehr auf die Gateway-Verbindung oder die automatische Servereinrichtung. Anwendung und Zielserver werden vorher über Discord geprüft. Nach erfolgreicher Registrierung läuft alle 15 Minuten eine erneute Prüfung; fehlgeschlagene Versuche werden nach einer Minute erneut geprüft. Ein einzelner abgelehnter Befehl blockiert die übrigen nicht.
+
+Vorhandene Befehle werden anhand ihres vollständigen Schemas einschließlich Standardfreigabe und NSFW-Kennzeichnung abgeglichen. Die GoR-Befehle verwenden normale, nicht altersbeschränkte Standardfreigaben; Verwaltungsaktionen prüfen weiterhin die tatsächliche Zuständigkeit bei jeder Ausführung. Zusätzliche manuelle Freigaben unter Discord **Servereinstellungen → Integrationen** bleiben erhalten. Andere Befehle werden nicht gelöscht.
+
+Erst der Logeintrag `commands_registered` mit `confirmed: 29` bestätigt einen vollständigen Leseabgleich mit Discord. `discord_ready` bestätigt separat die Verbindung zum Empfangen der Befehle. Beide werden benötigt. Details zur Diagnose, wenn Discord die Befehle weiter ausblendet, stehen in [docs/BETRIEB.md](docs/BETRIEB.md#slash-befehle-fehlen).
+
 ## Automatische Einrichtung seit Version 4.3.0
 
 Nach einer bestätigten Discord-Verbindung richtet sich der Bot selbst ein. Mit dauerhaftem Speicher startet die GoR-Pflege automatisch und gleicht den verwalteten Aufbau danach alle 15 Minuten erneut ab. Ein manuelles `/communitypanel` ist für den Einstieg nicht mehr erforderlich.
@@ -72,7 +80,7 @@ Der Dienst verwendet das Repository **JuhlYT/GoR_Network_Discord**, Branch **mai
 
 Relative und zitierte Datenpfade werden einheitlich aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Absolute Pfade bleiben am bisherigen Ort. Ein fehlendes Volume erlaubt Orientierung und Rollenwahl; private Fälle, Veröffentlichungen und dauerhafte Verwaltung bleiben bis zur Vorbereitung pausiert.
 
-`service_starting` nennt die Version. Erst **`discord_ready`** bestätigt die geprüfte Discord-Verbindung; **`commands_registered`** bestätigt die Befehle. Ein grüner Build allein bestätigt den Login nicht. Fehlende Token und nicht rechtzeitig bestätigte Verbindungen beenden den Start mit einem festen Diagnosecode. Tokenwerte und fremde Fehlerkörper werden nicht protokolliert.
+`service_starting` nennt die Version. Erst **`discord_ready`** bestätigt die geprüfte Discord-Verbindung; **`commands_registered`** mit 29 bestätigten Befehlen bestätigt die Registrierung. Ein grüner Build allein bestätigt den Login nicht. Fehlende Token und nicht rechtzeitig bestätigte Verbindungen beenden den Start mit einem festen Diagnosecode. Tokenwerte und fremde Fehlerkörper werden nicht protokolliert.
 
 Die optionale Infrastructure-as-Code-Konfiguration steht unter `.railway/railway.ts`. Ein Apply gehört nur in das zugehörige GoR-Projekt, nachdem der Plan geprüft wurde; ein bestehender versiegelter Token wird mit `preserve()` erhalten.
 

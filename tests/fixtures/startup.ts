@@ -1,6 +1,6 @@
 /** Process fixture: no Discord network requests and no real credential. */
 import { EventEmitter } from "node:events";
-import { Client, Collection, Events, MessageFlags, PermissionFlagsBits as P } from "discord.js";
+import { Client, Collection, Events, MessageFlags, PermissionFlagsBits as P, Routes } from "discord.js";
 import { APPLICATION, GUILD, main } from "../../gor_network";
 
 class FixtureClient extends EventEmitter {
@@ -19,12 +19,37 @@ class FixtureClient extends EventEmitter {
       return this.entries;
     },
     create: async (definition: any) => {
+      if (definition.name === "faq" && Bun.env.GOR_FIXTURE_PARTIAL_SYNC === "true")
+        throw Object.assign(new Error("private-fixture-body"), { code: 50035 });
       const result = { id: definition.name, name: definition.name, type: 1, toJSON: () => definition };
       this.entries.set(result.id, result); return result;
     },
     edit: async (id: string, definition: any) => {
       const result = { id, name: definition.name, type: 1, toJSON: () => definition };
       this.entries.set(id, result); return result;
+    },
+  };
+  rest = {
+    setToken: (token: string) => {
+      if (token !== "fixture-not-a-real-discord-token") throw new Error("Unexpected fixture credential");
+      return this.rest;
+    },
+    get: async (route: string) => {
+      if (Bun.env.GOR_FIXTURE_INVALID_TOKEN === "true") throw Object.assign(new Error("private-fixture-body"), { status: 401 });
+      if (route === Routes.currentApplication()) return { id: this.user.id };
+      if (route === Routes.guild(GUILD)) return { id: GUILD };
+      if (route === Routes.applicationGuildCommands(APPLICATION, GUILD))
+        return [...(await this.commands.fetch()).values()].map(c => ({ ...c.toJSON(), id: c.id, type: 1 }));
+      throw new Error("Unexpected fixture GET route");
+    },
+    post: async (route: string, options: any) => {
+      if (route !== Routes.applicationGuildCommands(APPLICATION, GUILD)) throw new Error("Unexpected fixture POST route");
+      return this.commands.create(options.body);
+    },
+    patch: async (route: string, options: any) => {
+      const name = options.body.name;
+      if (route !== Routes.applicationGuildCommand(APPLICATION, GUILD, name)) throw new Error("Unexpected fixture PATCH route");
+      return this.commands.edit(name, options.body);
     },
   };
   guild: any = { id: GUILD, ownerId: "fixture-owner", commands: this.commands,

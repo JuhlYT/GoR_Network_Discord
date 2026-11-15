@@ -1,4 +1,4 @@
-/** GoR Network bot, v4.3.0. Repository and container deployment (Bun).
+/** GoR Network bot, v4.3.1. Repository and container deployment (Bun).
  * Managed setup preserves unowned areas and member assignments; no message-content intent.
  * A persistent volume is required for case and publication management, not for connecting.
  */
@@ -6,6 +6,8 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { storageLocation } from "./storage_path";
+import { CommandRegistrar, syncRestCommands } from "./command_registry";
+export { commandShape } from "./command_registry";
 import { reconcileServer, hydrateManagedMaps, adoptSetupResource, SETUP_ISSUES, issueCode, resourceKnown, type SetupReport, type SetupContext } from "./auto_setup";
 import { SetupJournal } from "./setup_journal";
 import { BASIC } from "./setup_permissions";
@@ -20,7 +22,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.3.0";
+export const VERSION = "4.3.1";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -108,10 +110,11 @@ export function errorDiagnostic(error: any) {
   if (["SQLITE_CANTOPEN", "SQLITE_NOTADB", "SQLITE_CORRUPT"].includes(code))
     return { code: "database_unavailable", hint: "Die Bot-Datenbank konnte nicht geöffnet oder geprüft werden. Volume und Sicherung prüfen; vorhandene Daten nicht löschen." };
   if (code === "wrong_application") return { code, hint: "Der Token gehört nicht zur vorgesehenen GoR-Anwendung. Den richtigen Bot-Token verwenden." };
+  if (code === "commands_unconfirmed") return { code, hint: "Discord bestätigt noch nicht alle Befehle. commands_definition_failed nennt den betroffenen Befehl und einen festen Diagnosecode; erneute Prüfung nach einer Minute." };
   if (code === "wrong_guild" || code === 10004 || code === 50001) return { code: "guild_access_missing", hint: "Der Bot benötigt Zugriff auf den vorgesehenen GoR-Server. Einladung und applications.commands prüfen." };
   if (code === 50013) return { code: "permissions_missing", hint: "Discord verweigert einzelne Rechte. Botrolle, Kanalrechte und Befehlsfreigabe prüfen." };
   if (code === 50035) return { code: "command_definition_rejected", hint: "Discord hat eine Befehlsdefinition abgelehnt; der Bot bleibt verbunden." };
-  if (code === "TokenInvalid" || code === "TOKEN_INVALID" || code === 4004 || error?.status === 401)
+  if (code === "TokenInvalid" || code === "TOKEN_INVALID" || code === 4004 || error?.status === 401 || error?.cause?.status === 401)
     return { code: "token_invalid", hint: "Discord lehnt den Bot-Token ab. Den Laufzeitwert im Hosting prüfen." };
   if (["ENOTFOUND", "ENETUNREACH", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(code))
     return { code: "network_unavailable", hint: "Discord ist vom Dienst aus nicht erreichbar. Netzwerkzugriff und Trial-Einschränkungen prüfen." };
@@ -278,7 +281,8 @@ export class Store {
 }
 
 export function commandDefinitions() {
-  const command = (name: string, description: string) => new SlashCommandBuilder().setName(name).setDescription(description);
+  const command = (name: string, description: string) => new SlashCommandBuilder().setName(name).setDescription(description)
+    .setDefaultMemberPermissions(null).setNSFW(false);
   const caseNumber = (b: SlashCommandBuilder) => b.addIntegerOption(o => o.setName("fall").setDescription("Fallnummer").setMinValue(1).setRequired(true));
   return [
     command("start", "Dein persönlicher Einstieg ins GoR Network."),
@@ -354,18 +358,6 @@ export function sameAnnouncement(op: Operation, message: { author: { id: string 
     !got.url && !got.image && !got.thumbnail && !got.author && !got.timestamp && !got.video && !got.provider &&
     !(got.fields?.length);
 }
-export function commandShape(definition: any): string {
-  const option = (o: any): any => {
-    const shape: any = { type: o.type, name: o.name, description: o.description, required: !!o.required };
-    for (const [snake, camel] of [["min_value", "minValue"], ["max_value", "maxValue"], ["min_length", "minLength"], ["max_length", "maxLength"], ["channel_types", "channelTypes"]]) {
-      const value = o[snake] ?? o[camel]; if (value !== undefined) shape[snake] = value;
-    }
-    if (o.choices?.length) shape.choices = o.choices.map((c: any) => ({ name: c.name, value: c.value }));
-    if (o.options?.length) shape.options = o.options.map(option);
-    return shape;
-  };
-  return JSON.stringify([definition.name, definition.description, (definition.options || []).map(option)]);
-}
 async function answer(i: RepliableInteraction, content: string, extra: Record<string, any> = {}) {
   const options = { content, embeds: [], components: [], allowedMentions: MENTIONS, ...extra };
   if (i.deferred || i.replied) await i.editReply(options);
@@ -389,17 +381,6 @@ function leadership(member: GuildMember) {
 export function validateIdentity(userId: string | undefined, appId: string | undefined, guildId: string, _admin?: boolean) {
   if (userId !== APPLICATION || appId !== APPLICATION) throw new UserError("Die Anwendung passt nicht zum GoR Bot.", "wrong_application");
   if (guildId !== GUILD) throw new UserError("Dieser Server passt nicht zum GoR Network.", "wrong_guild");
-}
-export async function syncGuildCommands(guild: Guild) {
-  const current = await guild.commands.fetch();
-  for (const definition of commandDefinitions()) {
-    const existing = current.find(c => c.name === definition.name && c.type === 1);
-    if (!existing) await guild.commands.create(definition);
-    else if (commandShape(existing.toJSON()) !== commandShape(definition)) await guild.commands.edit(existing.id, definition);
-  }
-  const confirmed = await guild.commands.fetch();
-  if (commandDefinitions().some(d => !confirmed.some(c => c.type === 1 && commandShape(c.toJSON()) === commandShape(d))))
-    throw new UserError("Die Befehlsregistrierung ist noch nicht bestätigt.");
 }
 async function textChannel(guild: Guild, id: string) {
   const channel = await guild.channels.fetch(id, { force: true });
@@ -458,7 +439,11 @@ export async function main(options: { createClient?: () => Client; environment?:
   safeLog("database_opened");
   const client = options.createClient?.() || new Client({ intents: [GatewayIntentBits.Guilds], allowedMentions: MENTIONS,
     rest: { retries: 0, timeout: 15_000 } });
-  let ready = false, verified = false, commandsReady = false, commandsSyncing = false;
+  let ready = false, verified = false, commandTokenReady = false;
+  const commands = new CommandRegistrar(() => syncRestCommands(client.rest, APPLICATION, GUILD, commandDefinitions(), {
+    phase: phase => { commands.phase = phase; }, stopped: () => stopped,
+    failure: (command, error) => console.error(JSON.stringify({ at: new Date().toISOString(), event: "commands_definition_failed", command, ...errorDiagnostic(error) })),
+  }));
   let state = "starting", stopped = false, lastHealthy = Date.now(), administratorReported = false;
   const setupEnabled = !["false", "0", "off", "no"].includes((env.GOR_AUTO_SETUP ?? "true").trim().toLowerCase());
   let setupRunning = false, setupState = "pending", lastSetupAttempt = 0;
@@ -469,7 +454,8 @@ export async function main(options: { createClient?: () => Client; environment?:
   const server = Bun.serve({ hostname: "0.0.0.0", port: Number(env.PORT || 8080),
     fetch(request) { let dbOk = false; try { dbOk = store.health(); } catch {}
       return healthResponse(new URL(request.url).pathname, ready && client.isReady(), dbOk, state,
-        { storage: settings.storage, commands: commandsReady ? "registered" : "pending", setup: setupState }); } });
+        { storage: settings.storage, commands: commands.ready ? "registered" : "pending", command_phase: commands.phase,
+          command_count: String(commands.confirmed), command_total: String(commandDefinitions().length), setup: setupState }); } });
   safeLog("health_listener_started");
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T,>(fn: () => Promise<T>) => {
@@ -491,9 +477,9 @@ export async function main(options: { createClient?: () => Client; environment?:
   function maintain() {
     if (stopped) return;
     try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); }
+    void registerCommands();
     if (client.isReady()) {
       lastHealthy = Date.now();
-      if (verified && !commandsReady) void registerCommands();
       if (verified) void runSetup();
     }
     else if (Date.now() - lastHealthy > 300_000) { safeLog("connection_watchdog_restart"); void shutdown(1); return; }
@@ -717,7 +703,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       case "start":
       case "hilfe": await answer(i, "", guideView("start", CHANNELS)); break;
       case "faq": await answer(i, "", faqView(i.options.getString("thema") || undefined, CHANNELS)); break;
-      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commandsReady ? "bestätigt" : "wird erneut versucht"}\nAutomatische Einrichtung: ${setupState}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
+      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commands.ready ? `${commands.confirmed} bestätigt` : "wird erneut versucht"}\nAutomatische Einrichtung: ${setupState}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
       case "unterstuetzen": await answer(i, "", guideView("unterstuetzen", CHANNELS)); break;
       case "rollen": await rolesView(i, member); break;
       case "meine_faelle": await ownCases(i, member); break;
@@ -904,13 +890,14 @@ export async function main(options: { createClient?: () => Client; environment?:
     }).finally(() => { try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); } });
   });
   async function registerCommands() {
-    if (commandsSyncing || stopped || !verified || !client.isReady()) return;
-    commandsSyncing = true;
+    if (stopped || !commandTokenReady) return;
     try {
-      await syncGuildCommands(await client.guilds.fetch(GUILD));
-      commandsReady = true; safeLog("commands_registered");
-    } catch (error) { commandsReady = false; logFailure("commands_registration_failed_retrying", error); }
-    finally { commandsSyncing = false; }
+      const report = await commands.sync();
+      if (report && !stopped) console.log(JSON.stringify({ at: new Date().toISOString(), event: "commands_registered", confirmed: report.confirmed, total: commandDefinitions().length, guild: GUILD }));
+    } catch (error) {
+      if (!stopped) console.error(JSON.stringify({ at: new Date().toISOString(), event: "commands_registration_failed_retrying",
+        phase: commands.phase, confirmed: commands.confirmed, total: commandDefinitions().length, ...errorDiagnostic(error) }));
+    }
   }
   async function runSetup(force = false) {
     if (stopped || !verified || !client.isReady() || setupRunning) return;
@@ -957,6 +944,9 @@ export async function main(options: { createClient?: () => Client; environment?:
     await shutdown(1); return;
   }
   console.log(JSON.stringify({ at: new Date().toISOString(), event: "configuration_token_found", source: token.key }));
+  client.rest.setToken(token.value); commandTokenReady = true;
+  safeLog("commands_registration_starting");
+  void registerCommands();
   startupDeadline = setTimeout(() => {
     if (verified || stopped) return;
     state = "startup_timeout"; logFailure("discord_startup_timeout", { code: "startup_timeout" }); void shutdown(1);

@@ -57,6 +57,19 @@ Bei SIGTERM werden laufende verwaltete Änderungen abgewartet und der Dienst sau
 
 ## Abnahme auf Discord
 
+### Slash-Befehle fehlen
+
+1. Im aktuellen Railway-Deployment muss `service_starting` die Version **4.3.1** nennen. Ein älteres Deployment enthält diese Reparatur noch nicht.
+2. `commands_registration_starting` startet die Gateway-unabhängige Registrierung. `commands_registered` mit `confirmed: 29`, `total: 29` bestätigt die Befehle auf Server `1571171516677361704`. Ein einzelner Fehler nennt unter `commands_definition_failed` den betroffenen Befehlsnamen; andere gültige Befehle werden trotzdem registriert. `commands_registration_failed_retrying` bedeutet, dass die vollständige Registrierung noch nicht bestätigt ist.
+3. `discord_ready` muss ebenfalls erscheinen: registrierte Befehle allein bestätigen keine aktive Verbindung zum Empfangen und Beantworten der Interaktionen. Bei `token_invalid`, `wrong_application` oder `guild_access_missing` den Laufzeitwert beziehungsweise die Installation der vorgesehenen GoR-App prüfen. Keine Tokenwerte in Chat oder Screenshots weitergeben.
+4. Sind beide Schritte bestätigt, aber `/start` wird im Zielserver nicht angeboten: unter **Servereinstellungen → Integrationen → GoR-App** prüfen, ob die App und ihre Befehle für Nutzer, Rollen und Kanal freigegeben sind. Im betreffenden Kanal muss **Anwendungsbefehle verwenden** erlaubt sein. Danach Discord einmal mit Strg+R neu laden und `/start` im GoR-Startkanal auswählen. Ein direkt auf diesem Server registrierter Befehl benötigt keine globale Wartefrist.
+
+Die Befehlsregistrierung ändert keine manuell gesetzten Integrationsfreigaben. Solche individuellen Befehlsrechte lassen sich nicht mit dem Bot-Token überschreiben. Bei einer normalen Bot-Einladung ist der OAuth-Scope `applications.commands` bereits im Scope `bot` eingeschlossen; eine erneute Einladung ist daher kein pauschaler Reparaturschritt.
+
+Die HTTP-Gesundheitsantwort nennt `commands`, `command_phase`, `command_count` und `command_total` getrennt vom Verbindungsstatus. Ein Teilstand wird nicht als vollständige Registrierung ausgegeben. Die Prüfläufe für den Registry-Code und die Prozessstarts verwenden eine simulierte Discord-Gegenstelle; sie ersetzen nicht die obigen Live-Bestätigungen.
+
+### Funktionsprüfung
+
 1. `/status` und `/serverpruefen`: korrekte Anwendung, vorhandene Rollen und Kanäle. Fehlende Rechte beheben. Community, Regelprüfung, Onboarding und AutoMod müssen jeweils in Discord bestätigt werden.
 2. Testmitglied: `/rollen` setzen und abwählen. Bestehende andere Rollen bleiben erhalten; Teamrollen und interne Zugriffe dürfen nicht auswählbar sein.
 3. Privaten allgemeinen Testfall eröffnen. Anfragender sieht ihn; fremdes Mitglied sieht ihn nicht. Ein unbeteiligter zuständiger Betreuer kann übernehmen. Abschluss sperrt das Schreiben für Beteiligte und erhält den Verlauf.
