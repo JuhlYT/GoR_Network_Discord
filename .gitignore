@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.*
+!.env.example
+betrieb/
+data/
+backups/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+__pycache__/
+.DS_Store
+dist/
+coverage/
+.railway/context.json
