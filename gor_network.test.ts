@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readdirSync, copyFileSync, readFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { storageLocation } from "./storage_path";
 import { ApplicationCommand, Client } from "discord.js";
 import { Store, GUILD, APPLICATION, ROLES, eligible, roleKeys, mayClose, privacyCheck,
   UserError, validateIdentity, commandDefinitions, healthResponse, sameAnnouncement, announcementEmbed, commandShape,
@@ -89,6 +90,20 @@ describe("Zuständigkeiten und Zugriffe", () => {
 });
 
 describe("Railway-Startkonfiguration", () => {
+  test("relative und zitierte Speicherpfade verwenden das Arbeitsverzeichnis des Bots", () => {
+    for (const [configured, expected] of [["data", "/app/data"], ["./betrieb", "/app/betrieb"],
+      [' "./gor data/" ', "/app/gor data"], ['"/gor-storage/"', "/gor-storage"], ["../gor-storage", "/gor-storage"]])
+      expect(storageLocation({ GOR_DATA_DIR: configured }, "/app").directory).toBe(expected);
+    expect(storageLocation({}, "/app", "/data").directory).toBe("/data");
+  });
+  test("auch ein relatives Volume hat Vorrang und wird vor beiden Startphasen gleich aufgelöst", () => {
+    expect(storageLocation({ RAILWAY_VOLUME_MOUNT_PATH: '"./volume"', GOR_DATA_DIR: "/stale" }, "/app"))
+      .toEqual({ directory: "/app/volume", hasVolume: true });
+    expect(storageLocation({ RAILWAY_VOLUME_MOUNT_PATH: "''", GOR_DATA_DIR: "data" }, "/app"))
+      .toEqual({ directory: "/app/data", hasVolume: false });
+    expect(runtimeSettings({ RAILWAY_ENVIRONMENT_ID: "fixture", RAILWAY_VOLUME_MOUNT_PATH: '"./volume"', GOR_DATA_DIR: "/stale" }))
+      .toMatchObject({ directory: join(process.cwd(), "volume"), storage: "persistent" });
+  });
   test("übliche Tokenvariablen werden ohne Namensabhängigkeit erkannt", () => {
     for (const key of ["GOR_DISCORD_BOT_TOKEN", "DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "BOT_TOKEN", "TOKEN"] as const)
       expect(readToken({ [key]: "fixture-token" })).toEqual({ key, value: "fixture-token" });

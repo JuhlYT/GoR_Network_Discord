@@ -1,10 +1,11 @@
-/** GoR Network bot, v4.1.3. Repository and container deployment (Bun).
+/** GoR Network bot, v4.1.4. Repository and container deployment (Bun).
  * No tokens, message-content intent, blanket command deletion or automatic server rebuild.
  * A persistent volume is required for case and publication management, not for connecting.
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { storageLocation } from "./storage_path";
 import {
   Client, GatewayIntentBits, Events, PermissionFlagsBits as P, ChannelType,
   SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder,
@@ -13,7 +14,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.1.3";
+export const VERSION = "4.1.4";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -81,10 +82,9 @@ export function readToken(env: RuntimeEnv) {
   return null;
 }
 export function runtimeSettings(env: RuntimeEnv) {
-  const volume = env.RAILWAY_VOLUME_MOUNT_PATH?.trim();
+  const { directory, hasVolume } = storageLocation(env);
   const railway = !!env.RAILWAY_ENVIRONMENT_ID;
-  const storage = volume ? "persistent" : railway ? "temporary" : "local";
-  const directory = volume || env.GOR_DATA_DIR?.trim() || "./betrieb";
+  const storage = hasVolume ? "persistent" : railway ? "temporary" : "local";
   const supportEnabled = storage !== "temporary" && !["false", "0", "off", "no"].includes((env.GOR_SUPPORT_ENABLED ?? "true").trim().toLowerCase());
   return { directory, storage, supportEnabled };
 }
@@ -384,7 +384,8 @@ export async function main(options: { createClient?: () => Client; environment?:
   const env = options.environment || Bun.env;
   const settings = runtimeSettings(env);
   if (settings.storage === "temporary") safeLog("storage_temporary_support_paused");
-  if (env.RAILWAY_VOLUME_MOUNT_PATH && env.GOR_DATA_DIR && resolve(env.RAILWAY_VOLUME_MOUNT_PATH) !== resolve(env.GOR_DATA_DIR))
+  if (settings.storage === "persistent" && env.GOR_DATA_DIR
+      && storageLocation({ GOR_DATA_DIR: env.GOR_DATA_DIR }).directory !== settings.directory)
     safeLog("data_directory_uses_attached_volume");
   safeLog("database_opening");
   const store = new Store(settings.directory);

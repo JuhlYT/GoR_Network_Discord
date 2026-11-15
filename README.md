@@ -2,7 +2,13 @@
 
 Privater Support, Projektaufnahme, eigene Spielerrollen und Ankündigungen für **GoR Network**. Die Anwendung läuft als dauerhaft verbundener Bot mit Bun und discord.js; die Bot-Datenbank bleibt auf einem eigenen Volume erhalten.
 
-## Startkorrekturen v4.1.3
+## Pfadreparatur v4.1.4
+
+Der Fehler `Data directory must be an absolute path` ist behoben: Relative Datenpfade werden jetzt gegen das Arbeitsverzeichnis des Bots aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Äußere Anführungszeichen und abschließende Schrägstriche werden bereinigt. Absolute Pfade bleiben am bisherigen Ort. Startskript und Bot verwenden dieselbe Pfadauflösung aus `storage_path.ts`; die Datenbank wird nicht verschoben.
+
+Die Containerprüfungen starten den Bot mit absoluten, relativen und zitierten Pfaden, schreiben einen Prüfwert in die Datenbank und bestätigen ihn nach dem Neustart. Aufgelöste System- und Anwendungsverzeichnisse sowie symbolische Links bleiben als Speicherziel gesperrt.
+
+### Startkorrekturen seit v4.1.3
 
 Ohne Token beendet sich der Dienst jetzt mit Fehlercode 1 statt als unverbundener HTTP-Prozess weiterzulaufen. Auch ein Verbindungsaufbau, der innerhalb von 120 Sekunden nicht bestätigt wird, endet mit einer eindeutigen Diagnose. Token und fremde Fehlermeldungen werden nicht protokolliert.
 
@@ -56,7 +62,7 @@ Es werden keine Nachrichtentexte mitgelesen. Supportantworten und Aufnahmeentsch
 
 `PORT` wird von Railway bereitgestellt. Keine Zugangsdaten in GitHub-Dateien, Issues oder Commitnachrichten speichern.
 
-4. Gesundheitsroute **`/health`**, Startfrist **120 Sekunden**, Neustart bei Fehlern mit **10 Versuchen**, keine parallelen alten und neuen Instanzen und **15 Sekunden** Beendigungsfrist einstellen. Beim eingebauten Containerstart werden die Volume-Rechte vorbereitet; der Bot selbst läuft als Benutzer `bun`. `/data` ist der empfohlene Mountpfad; eigene absolute Speicherpfade werden ebenfalls unterstützt. Das tatsächlich angehängte Volume hat Vorrang vor einem veralteten Datenpfad. Den vorhandenen Mountpfad für diese Reparatur nicht ändern; so bleibt die bestehende Datenbank am bisherigen Ort.
+4. Gesundheitsroute **`/health`**, Startfrist **120 Sekunden**, Neustart bei Fehlern mit **10 Versuchen**, keine parallelen alten und neuen Instanzen und **15 Sekunden** Beendigungsfrist einstellen. Beim eingebauten Containerstart werden die Volume-Rechte vorbereitet; der Bot selbst läuft als Benutzer `bun`. `/data` ist der empfohlene Mountpfad. Eigene absolute und relative Speicherpfade werden ebenfalls unterstützt; relative Werte beziehen sich im Container auf `/app`. Das tatsächlich angehängte Volume hat Vorrang vor einem veralteten Datenpfad. Den vorhandenen Mountpfad für diese Reparatur nicht ändern; so bleibt die bestehende Datenbank am bisherigen Ort.
 5. Deploymentzustand **SUCCESS**, Protokollereignis **`discord_ready`** und `/health` = **200** bestätigen. Danach die Discord-Abnahme durchführen. Eine öffentliche Domain wird für die Gateway-Verbindung nicht benötigt.
 
 Die entsprechende Railway-Konfiguration steht unter `.railway/railway.ts`. Sie verwendet Infrastructure as Code und verwaltet mit dem Partial `gor-discord-bot` nur die zugehörigen Ressourcen. Vor einem Apply immer den Plan lesen. Der Ausdruck `preserve()` erhält einen bereits geschützten Token; er enthält und erzeugt keinen Zugang. Die Datei ersetzt keine Kontofreischaltung und keine sichere Tokenhinterlegung.

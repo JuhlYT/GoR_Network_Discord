@@ -5,14 +5,11 @@ umask 077
 # Railway allows a custom mount path. Resolve it before preparing permissions;
 # never change ownership of application code, system directories or symlink targets.
 data_dir=$(bun -e '
-  const { isAbsolute, join, resolve } = require("node:path");
+  const { join } = require("node:path");
   const { lstatSync } = require("node:fs");
+  const { storageLocation } = await import("./storage_path.ts");
   const fail = message => { console.error(message); process.exit(1); };
-  const configured = process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim()
-    || process.env.GOR_DATA_DIR?.trim() || "/data";
-  if (!isAbsolute(configured)) fail("Data directory must be an absolute path, for example /data or /gor-storage.");
-  if (configured.split("/").includes("..")) fail("Data directory must not contain parent-directory segments.");
-  const directory = resolve(configured);
+  const { directory } = storageLocation(process.env, process.cwd(), "/data");
   const system = ["/bin", "/sbin", "/lib", "/lib64", "/usr", "/etc", "/dev", "/proc", "/sys", "/run"];
   const roots = ["/", "/app", "/var", "/var/lib", "/tmp", "/home", "/root", "/opt", "/mnt", "/media"];
   if (roots.includes(directory) || directory === process.cwd()
