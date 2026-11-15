@@ -17,7 +17,7 @@ def run_scenario(root, bun, port, scenario):
         env = os.environ.copy()
         for key in ('GOR_DISCORD_BOT_TOKEN', 'DISCORD_TOKEN', 'DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'TOKEN',
                     'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_VOLUME_MOUNT_PATH', 'GOR_FIXTURE_ADMIN',
-                    'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG'):
+                    'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG', 'GOR_FIXTURE_FLOW'):
             env.pop(key, None)
         env.update(PORT=str(port), GOR_DATA_DIR=data, GOR_SUPPORT_ENABLED='false')
         mocked = scenario != 'missing-token'
@@ -35,6 +35,10 @@ def run_scenario(root, bun, port, scenario):
                 env['GOR_FIXTURE_INVALID_TOKEN'] = 'true'
             if scenario == 'connection-timeout':
                 env['GOR_FIXTURE_HANG'] = 'true'
+            if scenario.startswith('flow-'):
+                env['GOR_FIXTURE_FLOW'] = scenario.removeprefix('flow-')
+            if scenario == 'flow-project':
+                env['GOR_SUPPORT_ENABLED'] = 'true'
         entry = 'tests/fixtures/startup.ts' if mocked else 'gor_network.ts'
         process = subprocess.Popen([bun, 'run', entry], cwd=root, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -98,6 +102,8 @@ def run_scenario(root, bun, port, scenario):
                 raise AssertionError('Administrator warning was not reported')
             if scenario == 'command-sync-failure' and 'commands_registration_failed_retrying' not in logs:
                 raise AssertionError('Failed command registration was not isolated from the connection')
+            if scenario.startswith('flow-') and 'fixture_flow_passed:' + scenario.removeprefix('flow-') not in logs:
+                raise AssertionError('The actual interaction handler did not confirm the community flow: ' + scenario)
             if 'fixture-not-a-real-discord-token' in logs or 'private-fixture-body' in logs:
                 raise AssertionError('Private credential or error body leaked')
             backups = list(Path(data).glob('backups/*.sqlite'))
@@ -121,6 +127,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     scenarios = ['missing-token', 'invalid-token', 'connection-timeout', 'railway-no-volume', 'railway-admin',
                  'command-sync-failure', 'wrong-application']
+    scenarios += ['flow-' + flow for flow in ('start', 'public-guide', 'private-guide', 'private-roles', 'own', 'team', 'phase', 'project')]
     results = [run_scenario(root, args.bun, args.port, scenario) for scenario in scenarios]
     print(json.dumps({'smoke_test': 'passed', 'scenarios': results}))
 

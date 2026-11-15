@@ -1,4 +1,4 @@
-/** GoR Network bot, v4.1.4. Repository and container deployment (Bun).
+/** GoR Network bot, v4.2.0. Repository and container deployment (Bun).
  * No tokens, message-content intent, blanket command deletion or automatic server rebuild.
  * A persistent volume is required for case and publication management, not for connecting.
  */
@@ -6,15 +6,17 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { storageLocation } from "./storage_path";
+import { communityHub, guideView, faqView, communityNavigation, sameCommunityPanel, GUIDE_TOPICS, FAQ_TOPICS,
+  PROJECT_PHASES, isProjectPhase, canAdvanceProject, pageWindow, type ProjectPhase } from "./community_ui";
 import {
   Client, GatewayIntentBits, Events, PermissionFlagsBits as P, ChannelType,
   SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder,
   StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
-  MessageFlags, ActivityType, GuildMember, TextChannel, OverwriteType,
+  MessageFlags, ActivityType, GuildMember, TextChannel, OverwriteType, escapeMarkdown,
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.1.4";
+export const VERSION = "4.2.0";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -88,10 +90,11 @@ export function runtimeSettings(env: RuntimeEnv) {
   const supportEnabled = storage !== "temporary" && !["false", "0", "off", "no"].includes((env.GOR_SUPPORT_ENABLED ?? "true").trim().toLowerCase());
   return { directory, storage, supportEnabled };
 }
-const TEMPORARY_ACTIONS = new Set(["hilfe", "status", "rollen", "unterstuetzen", "serverpruefen", "gor:roles:v4"]);
+const TEMPORARY_ACTIONS = new Set(["start", "hilfe", "faq", "status", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5",
+  ...GUIDE_TOPICS.map(topic => "gor:guide:v5:" + topic)]);
 export function requireStorage(settings: ReturnType<typeof runtimeSettings>, action: string) {
   if (settings.storage === "temporary" && !TEMPORARY_ACTIONS.has(action))
-    throw new UserError("Der Bot ist verbunden. Für private Fälle und Veröffentlichungen muss die Leitung noch ein dauerhaftes Datenvolume anbinden. /status zeigt den Betriebsstand.", "storage_required");
+    throw new UserError(`Diese Funktion wird gerade vorbereitet. Die Networkleitung hilft dir über <#${CHANNELS.kontakt}> weiter.`, "storage_required");
 }
 export function errorDiagnostic(error: any) {
   const code = error?.code ?? error?.cause?.code;
@@ -155,6 +158,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor_id TEXT NOT NULL,
       target TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL, discord_id TEXT, created REAL NOT NULL, expires REAL NOT NULL);
       CREATE TABLE IF NOT EXISTS interactions (id TEXT PRIMARY KEY, created REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS project_reviews (case_id INTEGER PRIMARY KEY, phase TEXT NOT NULL, actor_id TEXT NOT NULL, updated REAL NOT NULL);
       CREATE INDEX IF NOT EXISTS case_queue ON cases(guild_id,status);
       CREATE INDEX IF NOT EXISTS case_opener ON cases(guild_id,opener_id,created);`);
     chmodSync(join(this.directory, "support.sqlite"), 0o600);
@@ -188,6 +192,28 @@ export class Store {
     return this.get(id);
   }
   queue(): Case[] { return this.db.query("SELECT * FROM cases WHERE guild_id=? AND status!='closed' ORDER BY created").all(GUILD) as Case[]; }
+  memberCases(userId: string): Case[] {
+    return this.db.query("SELECT * FROM cases WHERE guild_id=? AND opener_id=? ORDER BY id DESC LIMIT 10").all(GUILD, userId) as Case[];
+  }
+  projectPhase(id: number): ProjectPhase {
+    if (this.get(id).kind !== "projekt") throw new UserError("Dieser Fall ist keine Projektanfrage.");
+    const row = this.db.query("SELECT phase FROM project_reviews WHERE case_id=?").get(id) as { phase: string } | null;
+    if (row && !isProjectPhase(row.phase)) throw new UserError("Der Projektstand muss von der Leitung geprüft werden.");
+    return row?.phase as ProjectPhase || "neu";
+  }
+  setProjectPhase(id: number, next: string, actor: string) {
+    return this.db.transaction(() => {
+      const c = this.get(id), previous = this.projectPhase(id);
+      if (c.status !== "open") throw new UserError("Die Projektanfrage ist nicht offen oder muss zuerst geprüft werden.");
+      if (c.opener_id === actor) throw new UserError("Deine eigene Projektanfrage muss eine andere zuständige Leitung prüfen.");
+      if (!isProjectPhase(next) || !canAdvanceProject(previous, next))
+        throw new UserError(`Dieser Phasenwechsel ist nicht möglich. Aktuell: ${PROJECT_PHASES[previous]}. Der Ablauf ist Neu → Prüfung → Gespräch → Pilotphase → Aufnahme; eine Ablehnung ist in jeder offenen Phase möglich.`);
+      this.db.query("INSERT OR REPLACE INTO project_reviews(case_id,phase,actor_id,updated) VALUES (?,?,?,?)").run(id, next, actor, now());
+      this.db.query("UPDATE cases SET updated=? WHERE id=? AND guild_id=?").run(now(), id, GUILD);
+      this.audit(actor, "project_phase", String(id), next);
+      return next;
+    }).immediate();
+  }
   setting(key: string, value?: string) {
     if (value !== undefined) this.db.query("INSERT OR REPLACE INTO settings VALUES (?,?)").run(key, value);
     return (this.db.query("SELECT value FROM settings WHERE key=?").get(key) as any)?.value as string | undefined;
@@ -251,18 +277,31 @@ export function commandDefinitions() {
   const command = (name: string, description: string) => new SlashCommandBuilder().setName(name).setDescription(description);
   const caseNumber = (b: SlashCommandBuilder) => b.addIntegerOption(o => o.setName("fall").setDescription("Fallnummer").setMinValue(1).setRequired(true));
   return [
+    command("start", "Dein persönlicher Einstieg ins GoR Network."),
     command("hilfe", "Dein Weg zu Spielen, Mitspielern und Hilfe."),
+    command("faq", "Klare Antworten zu Einstieg, Rollen, Support und Network.")
+      .addStringOption(o => o.setName("thema").setDescription("Wozu möchtest du mehr wissen?")
+        .addChoices(...Object.entries(FAQ_TOPICS).map(([value, name]) => ({ name, value })))),
     command("status", "Verbindung und Funktionen des GoR Bots prüfen."),
     command("support", "Privates Anliegen an die zuständige Betreuung richten."),
     command("projektanfrage", "Ein Projekt für das GoR Network vorstellen."),
     command("rollen", "Deine Spiel- und Benachrichtigungsrollen selbst auswählen."),
     command("unterstuetzen", "Informationen zur freiwilligen Unterstützung von GoR."),
-    command("faelle", "Deine zuständigen offenen Supportfälle anzeigen."),
+    command("meine_faelle", "Deine eigenen Anliegen und ihren Bearbeitungsstand anzeigen."),
+    command("team", "Dein Teamboard mit Zuständigkeiten und offenen Anliegen."),
+    command("faelle", "Deine zuständigen offenen Supportfälle anzeigen.")
+      .addIntegerOption(o => o.setName("seite").setDescription("Seite der Fallübersicht").setMinValue(1)),
+    caseNumber(command("projektstatus", "Leitung: die Aufnahmephase eines Serverprojekts fortschreiben."))
+      .addStringOption(o => o.setName("phase").setDescription("Nächster Schritt in der Projektaufnahme").setRequired(true)
+        .addChoices(...Object.entries(PROJECT_PHASES).filter(([value]) => value !== "neu").map(([value, name]) => ({ name, value })))),
     caseNumber(command("uebernehmen", "Einen zuständigen Fall als unbeteiligter Bearbeiter übernehmen.")),
     caseNumber(command("schliessen", "Einen eigenen oder zugewiesenen Fall abschließen.")),
     caseNumber(command("fall_zuordnen", "Inhaber: bestehenden Kanal nach einer unklaren Aktion bestätigen."))
       .addChannelOption(o => o.setName("kanal").setDescription("Bestehender Fallkanal").addChannelTypes(ChannelType.GuildText).setRequired(true)),
     command("supportpanel", "Inhaber: das Supportbedienfeld veröffentlichen oder aktualisieren."),
+    command("communitypanel", "Inhaber: das zentrale Community-Menü im Startkanal veröffentlichen."),
+    command("communitypanel_zuordnen", "Inhaber: ein bereits vorhandenes Community-Menü bestätigen.")
+      .addStringOption(o => o.setName("nachricht").setDescription("Nachrichten-ID im Startkanal").setRequired(true)),
     command("panel_zuordnen", "Inhaber: ein bereits vorhandenes Supportbedienfeld bestätigen.")
       .addStringOption(o => o.setName("nachricht").setDescription("Nachrichten-ID im Supportkanal").setRequired(true)),
     command("serverpruefen", "Leitung: Struktur, Rechte und Community-Funktionen prüfen."),
@@ -314,7 +353,7 @@ export function commandShape(definition: any): string {
   return JSON.stringify([definition.name, definition.description, (definition.options || []).map(option)]);
 }
 async function answer(i: RepliableInteraction, content: string, extra: Record<string, any> = {}) {
-  const options = { content, allowedMentions: MENTIONS, ...extra };
+  const options = { content, embeds: [], components: [], allowedMentions: MENTIONS, ...extra };
   if (i.deferred || i.replied) await i.editReply(options);
   else await i.reply({ ...options, flags: MessageFlags.Ephemeral });
 }
@@ -361,8 +400,19 @@ async function caseChannel(guild: Guild, c: Case) {
   if (!c.channel_id) throw new UserError("Dieser Fall muss zuerst vom Inhaber geprüft werden.");
   const channel = await textChannel(guild, c.channel_id); checkPrivacy(channel, c); return channel;
 }
-function caseModal(kind: string) {
+export function caseModal(kind: string) {
   if (!Object.hasOwn(KINDS, kind)) throw new UserError("Unbekannte Fallart.");
+  if (kind === "projekt") return new ModalBuilder().setCustomId("gor:project:v5").setTitle("Dein Projekt für GoR Network").addComponents(
+    ...[
+      ["project", "Projektname", TextInputStyle.Short, 80, true, "Wie heißt dein Projekt?"],
+      ["game", "Spiel und Spielmodus", TextInputStyle.Short, 80, true, "Zum Beispiel Minecraft Survival oder GMod RP"],
+      ["scale", "Stand, Team und aktive Spieler", TextInputStyle.Short, 120, true, "Konzept / im Aufbau / live · Team · Spieler"],
+      ["proposal", "Idee und gewünschte Zusammenarbeit", TextInputStyle.Paragraph, 450, true, "Was macht euch aus und was möchtet ihr gemeinsam mit GoR erreichen?"],
+      ["contact", "Kontakt oder öffentlicher Projektlink", TextInputStyle.Short, 300, false, "Optional: öffentlicher Discord- oder Weblink"],
+    ].map(([id, label, style, limit, required, placeholder]) => new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId(id as string).setLabel(label as string).setStyle(style as TextInputStyle)
+        .setMaxLength(limit as number).setRequired(required as boolean).setPlaceholder(placeholder as string))),
+  );
   return new ModalBuilder().setCustomId("gor:case:" + kind).setTitle(KINDS[kind].title).addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("summary")
       .setLabel(kind === "projekt" ? "Projekt und Spiel" : "Worum geht es?").setStyle(TextInputStyle.Short).setMaxLength(100).setRequired(true)),
@@ -447,8 +497,82 @@ export async function main(options: { createClient?: () => Client; environment?:
   function canHandle(c: Case, member: GuildMember) {
     return eligible(c.kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId);
   }
+  function requireTeam(member: GuildMember) {
+    if (!Object.keys(KINDS).some(kind => eligible(kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId)))
+      throw new UserError("Für deine Rolle ist keine Fallzuständigkeit hinterlegt. Deine eigenen Anfragen findest du unter /meine_faelle.");
+  }
+  function caseLine(c: Case) {
+    const label = ({ open: "Offen", closed: "Abgeschlossen", creating: "Wird vorbereitet", assigning: "In Zuordnung", closing: "Wird abgeschlossen", needs_review: "Wird geprüft" } as Record<string, string>)[c.status] || "Wird geprüft";
+    const phase = c.kind === "projekt" ? ` · ${PROJECT_PHASES[store.projectPhase(c.id)]}` : "";
+    return `**#${c.id} · ${KINDS[c.kind]?.title || "Anliegen"}**\n${label}${phase} · seit <t:${Math.floor(c.created)}:R>\n${c.channel_id ? `<#${c.channel_id}>` : "Die Betreuung bereitet den Kontakt vor"} · ${c.assignee_id ? `Betreuung: <@${c.assignee_id}>` : "Noch nicht übernommen"}`;
+  }
+  async function ownCases(i: RepliableInteraction, member: GuildMember) {
+    const rows = store.memberCases(member.id);
+    await answer(i, "", { embeds: [embed("GoR · Deine Anliegen", rows.length ? rows.map(caseLine).join("\n\n") : "Du hast bisher keine Anfragen gestellt. Wenn du Unterstützung brauchst, öffne /support; für dein Serverprojekt gibt es /projektanfrage.")
+      .setFooter({ text: "Nur für dich sichtbar · Bis zu zehn zuletzt gestellte Anfragen" }).toJSON()], components: communityNavigation() });
+  }
+  async function caseBoard(i: RepliableInteraction, member: GuildMember, requested = 1) {
+    requireTeam(member);
+    const all = store.queue().filter(c => canHandle(c, member)), page = pageWindow(all, requested);
+    const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`gor:queue:v5:${Math.max(1, page.page - 1)}`).setLabel("Zurück").setStyle(ButtonStyle.Secondary).setDisabled(page.page <= 1),
+      new ButtonBuilder().setCustomId(`gor:queue:v5:${page.page}`).setLabel("Aktualisieren").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`gor:queue:v5:${page.page + 1}`).setLabel("Weiter").setStyle(ButtonStyle.Secondary).setDisabled(page.page >= page.pages),
+    );
+    const body = page.items.length ? page.items.map(caseLine).join("\n\n") : "Aktuell liegen keine offenen Fälle in deiner Zuständigkeit vor.";
+    await answer(i, "", { embeds: [embed("GoR · Deine Fallübersicht", body)
+      .setFooter({ text: `Seite ${page.page}/${page.pages} · ${page.total} zuständige Fälle · Übernahme: /uebernehmen` }).toJSON()], components: [controls.toJSON()] });
+  }
+  async function rolesView(i: RepliableInteraction, member: GuildMember) {
+    const select = new StringSelectMenuBuilder().setCustomId("gor:roles:v4").setPlaceholder("Deine Auswahl · leer = keine dieser Rollen")
+      .setMinValues(0).setMaxValues(Object.keys(SELF_ROLES).length).addOptions(Object.entries(SELF_ROLES).map(([value, label]) => ({ value, label, default: member.roles.cache.has(ROLES[value]) })));
+    await answer(i, "", { embeds: [embed("GoR · Deine Interessen", "Wähle die Spiele und Themen, die dich interessieren. Du kannst deine Auswahl jederzeit ändern. Deine übrigen Rollen bleiben erhalten.").toJSON()],
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select).toJSON()] });
+  }
+  async function serverReport(i: RepliableInteraction, member: GuildMember) {
+    leadership(member); const guild = member.guild;
+    const [roles, channels, me] = await Promise.all([guild.roles.fetch(), guild.channels.fetch(), guild.members.fetchMe({ force: true })]);
+    const missingRoles = Object.keys(ROLES).filter(key => !roles.has(ROLES[key]));
+    const missingChannels = Object.keys(CHANNELS).filter(key => !channels.has(CHANNELS[key]));
+    const missingCategories = Object.keys(CATEGORIES).filter(key => !channels.has(CATEGORIES[key]));
+    const basic = [[P.ManageChannels, "Kanäle verwalten"], [P.ManageRoles, "Rollen verwalten"], [P.ViewChannel, "Kanäle sehen"],
+      [P.SendMessages, "Nachrichten senden"], [P.EmbedLinks, "Links einbetten"], [P.ReadMessageHistory, "Verlauf lesen"]] as const;
+    const missingPermissions = basic.filter(([permission]) => !me.permissions.has(permission)).map(([, label]) => label);
+    const roleIssues = Object.keys(SELF_ROLES).filter(key => {
+      const role = roles.get(ROLES[key]);
+      return !role || role.managed || role.permissions.bitfield !== 0n || role.comparePositionTo(me.roles.highest) >= 0;
+    });
+    const view = embed("GoR · Stand deines Discords", "Aktuelle Struktur und konkrete Ansatzpunkte für die Leitung.")
+      .addFields(
+        { name: "Rollen", value: `${Object.keys(ROLES).length - missingRoles.length}/${Object.keys(ROLES).length}`, inline: true },
+        { name: "Kategorien", value: `${Object.keys(CATEGORIES).length - missingCategories.length}/${Object.keys(CATEGORIES).length}`, inline: true },
+        { name: "Kanäle", value: `${Object.keys(CHANNELS).length - missingChannels.length}/${Object.keys(CHANNELS).length}`, inline: true },
+        { name: "Community & Einstieg", value: `Community: ${guild.features.includes("COMMUNITY") ? "bestätigt" : "nicht bestätigt"}\nRegelprüfung: ${guild.features.includes("MEMBER_VERIFICATION_GATE_ENABLED") ? "bestätigt" : "nicht bestätigt"}\nOnboarding: ${(guild.features as string[]).includes("GUILD_ONBOARDING_EVER_ENABLED") ? "wurde eingerichtet; aktuellen Ablauf prüfen" : "nicht bestätigt"}` },
+        { name: "Botrechte", value: missingPermissions.length ? "Es fehlen: " + missingPermissions.join(", ") : "Alle sechs geprüften Grundrechte vorhanden." },
+        { name: "Rollenwahl", value: roleIssues.length ? "Rollen oder Rangfolge prüfen: " + roleIssues.join(", ") : "Die fünf Auswahlrollen sind vorhanden, ohne Grundrechte und unter der Botrolle." },
+        { name: "Fallbetrieb & Sicherung", value: settings.storage === "temporary" ? "Persönliche Fälle sind noch pausiert. Die Leitung muss die dauerhafte Datenhaltung fertigstellen." : `${store.queue().filter(c => canHandle(c, member)).length} offene Fälle in deiner Zuständigkeit.\nLetzte lokale Sicherung: ${store.backupHealthy ? "erfolgreich" : "prüfen"}.` },
+      ).setFooter({ text: "Leseprüfung · AutoMod, Kanalüberschreibungen und der aktuelle Onboarding-Ablauf werden separat abgenommen" });
+    if (missingRoles.length || missingChannels.length || missingCategories.length || missingPermissions.length || roleIssues.length) view.setColor(0xf2b84b);
+    if (missingRoles.length) view.addFields({ name: "Fehlende Rollen", value: missingRoles.join(", ") });
+    if (missingCategories.length) view.addFields({ name: "Fehlende Kategorien", value: missingCategories.join(", ") });
+    if (missingChannels.length) view.addFields({ name: "Fehlende Kanäle", value: missingChannels.join(", ") });
+    await answer(i, "", { embeds: [view.toJSON()], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId("gor:audit:v5").setLabel("Stand aktualisieren").setStyle(ButtonStyle.Primary),
+    ).toJSON()] });
+  }
   async function createCase(i: any, member: GuildMember, kind: string) {
     if (!settings.supportEnabled) throw new UserError("Der private Support ist noch nicht aktiviert. Bitte kontaktiere die Networkleitung.");
+    if (!Object.hasOwn(KINDS, kind)) throw new UserError("Bitte wähle eine gültige Anliegenart.");
+    const application = kind === "projekt" && i.customId === "gor:project:v5";
+    const get = (key: string) => escapeMarkdown(i.fields.getTextInputValue(key).trim());
+    const details = application ? [
+      { name: "Projekt", value: get("project") }, { name: "Spiel & Modus", value: get("game"), inline: true },
+      { name: "Aktueller Stand", value: get("scale"), inline: true }, { name: "Konzept & Zusammenarbeit", value: get("proposal") },
+      { name: "Kontakt / öffentlicher Projektlink", value: get("contact") || "Kontakt über diesen privaten Fall" },
+    ] : [];
+    if (details.some(field => !field.value)) throw new UserError("Bitte fülle die Pflichtfelder deiner Projektanfrage aus.");
+    const description = application ? "Deine Projektanfrage ist eingegangen. Der aktuelle Schritt ist **Neu eingegangen**. Den weiteren Stand findest du unter /meine_faelle."
+      : `**${get("summary")}**\n\n${get("details")}`;
     const guild = member.guild, me = await assertBot(guild);
     const category = await guild.channels.fetch(CATEGORIES.hilfe, { force: true });
     const needed = [P.ManageChannels, P.ManageRoles, P.ViewChannel, P.SendMessages, P.ReadMessageHistory];
@@ -462,7 +586,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     }
     const c = store.reserve(member.id, kind);
     try {
-      const ch = await guild.channels.create({ name: `fall-${String(c.id).padStart(4, "0")}`, type: ChannelType.GuildText,
+      const ch = await guild.channels.create({ name: `${kind === "projekt" ? "projekt" : "fall"}-${String(c.id).padStart(4, "0")}`, type: ChannelType.GuildText,
         parent: CATEGORIES.hilfe, topic: `gor-case:${c.id}`, reason: "GoR privater Supportfall",
         permissionOverwrites: [
           { id: GUILD, type: OverwriteType.Role, deny: [P.ViewChannel] },
@@ -472,7 +596,8 @@ export async function main(options: { createClient?: () => Client; environment?:
       const saved = store.change(c.id, { channel_id: ch.id, status: "open" });
       const verified = await caseChannel(guild, saved);
       await verified.send({ embeds: [embed(`${KINDS[kind].title} · Fall ${c.id}`,
-        `**${i.fields.getTextInputValue("summary")}**\n\n${i.fields.getTextInputValue("details")}\n\nDu und zugewiesene Bearbeiter sehen diesen Fall. Inhaber und Administratoren können technisch ebenfalls zugreifen. Bitte keine Passwörter oder Tokens senden. Eine Betreuung rund um die Uhr wird nicht versprochen.`)], allowedMentions: MENTIONS });
+        `${description}\n\nDu und zugewiesene Bearbeiter sehen diesen Fall. Inhaber und Administratoren können technisch ebenfalls zugreifen. Bitte keine Passwörter oder Tokens senden. Eine Betreuung rund um die Uhr wird nicht versprochen.`).addFields(details)], allowedMentions: MENTIONS,
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId("gor:own:v5").setLabel("Meine Anliegen ansehen").setStyle(ButtonStyle.Secondary))] });
       store.audit(member.id, "case_create", String(c.id));
       await answer(i, `Dein privater Fall ist angelegt: <#${verified.id}>. Eine zuständige Person kann ihn übernehmen.`);
     } catch (e) { store.change(c.id, { status: "needs_review" }); store.audit(member.id, "case_create", String(c.id), "needs_review"); throw e; }
@@ -522,18 +647,32 @@ export async function main(options: { createClient?: () => Client; environment?:
     if (i.isStringSelectMenu() && i.customId === "gor:kind:v4") {
       await i.showModal(caseModal(i.values[0])); return;
     }
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    // Public panels open a personal card; navigation inside an ephemeral card updates it in place.
+    if (i.isMessageComponent() && i.message.flags.has(MessageFlags.Ephemeral)) await i.deferUpdate();
+    else await i.deferReply({ flags: MessageFlags.Ephemeral });
     const member = await memberFor(i), guild = member.guild;
     await assertBot(guild);
+    if (i.isButton() && i.customId.startsWith("gor:guide:v5:")) {
+      const topic = i.customId.slice("gor:guide:v5:".length);
+      if (!(GUIDE_TOPICS as readonly string[]).includes(topic)) throw new UserError("Bitte öffne deinen Einstieg erneut mit /start.");
+      await answer(i, "", guideView(topic, CHANNELS)); return;
+    }
+    if (i.isButton() && i.customId === "gor:roles:open:v5") { await rolesView(i, member); return; }
+    if (i.isButton() && i.customId === "gor:own:v5") { await ownCases(i, member); return; }
+    if (i.isButton() && i.customId === "gor:audit:v5") { await serverReport(i, member); return; }
+    if (i.isButton() && /^gor:queue:v5:\d{1,9}$/.test(i.customId)) {
+      await caseBoard(i, member, Number(i.customId.split(":")[3])); return;
+    }
     if ((i.isButton() && i.customId === "gor:support:v3") || (i.isChatInputCommand() && i.commandName === "support")) {
       const select = new StringSelectMenuBuilder().setCustomId("gor:kind:v4").setPlaceholder("Wähle dein Anliegen")
         .addOptions(Object.entries(KINDS).map(([value, { title: label }]) => ({ label, value })));
       await answer(i, "Wähle eine Fallart. Allgemeine Fragen passen auch in den Fragenkanal. Persönliche Zahlungsdetails bleiben im privaten Kontakt.",
         { components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)] }); return;
     }
+    if (i.isModalSubmit() && i.customId === "gor:project:v5") { await serial(() => createCase(i, member, "projekt")); return; }
     if (i.isModalSubmit() && i.customId.startsWith("gor:case:")) { await serial(() => createCase(i, member, i.customId.slice(9))); return; }
     if (i.isStringSelectMenu() && i.customId === "gor:roles:v4") {
-      await serial(() => safeSelfRoles(member, i.values)); await answer(i, "Deine Spiel- und Benachrichtigungsrollen sind gespeichert."); return;
+      await serial(() => safeSelfRoles(member, i.values)); await answer(i, "Deine Spiel- und Benachrichtigungsrollen sind gespeichert.", { components: communityNavigation() }); return;
     }
     if (i.isButton() && (i.customId.startsWith("gor:publish:") || i.customId.startsWith("gor:cancel:"))) {
       leadership(member); const id = i.customId.split(":")[2];
@@ -554,19 +693,35 @@ export async function main(options: { createClient?: () => Client; environment?:
     }
     if (!i.isChatInputCommand()) throw new UserError("Diese Auswahl ist nicht mehr gültig. Bitte den zugehörigen Befehl erneut öffnen.");
     switch (i.commandName) {
-      case "hilfe": await answer(i, "**Willkommen bei GoR Network**\nSpiele und Projekte: <#" + CHANNELS.projekte + ">\nMitspieler: <#" + CHANNELS.mitspielersuche + ">\nHilfe: /support · Eigene Rollen: /rollen\nEin Projekt für das Network vorstellen: /projektanfrage\nDu gehörst auch ohne Zahlung zu GoR."); break;
+      case "start":
+      case "hilfe": await answer(i, "", guideView("start", CHANNELS)); break;
+      case "faq": await answer(i, "", faqView(i.options.getString("thema") || undefined, CHANNELS)); break;
       case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commandsReady ? "bestätigt" : "wird erneut versucht"}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nRollenwahl und Orientierung sind verfügbar.\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
-      case "unterstuetzen": await answer(i, `GoR wird freiwillig unterstützt. Informationen: <#${CHANNELS["gor-unterstuetzen"]}>\nKosten und Stand: <#${CHANNELS["kosten-und-stand"]}>\nhttps://gor-shop.de\nDu kannst auch ohne Zahlung vollständig zur Community gehören. Für Zahlungsfragen nutze /support.`); break;
-      case "rollen": {
-        const select = new StringSelectMenuBuilder().setCustomId("gor:roles:v4").setPlaceholder("Deine Auswahl · leer = keine dieser Rollen")
-          .setMinValues(0).setMaxValues(Object.keys(SELF_ROLES).length).addOptions(Object.entries(SELF_ROLES).map(([value, label]) => ({ value, label, default: member.roles.cache.has(ROLES[value]) })));
-        await answer(i, "Wähle die Spiele und Themen, die dich interessieren. Deine übrigen Rollen bleiben erhalten.", { components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)] }); break;
+      case "unterstuetzen": await answer(i, "", guideView("unterstuetzen", CHANNELS)); break;
+      case "rollen": await rolesView(i, member); break;
+      case "meine_faelle": await ownCases(i, member); break;
+      case "faelle": await caseBoard(i, member, i.options.getInteger("seite") || 1); break;
+      case "team": {
+        requireTeam(member); const rows = store.queue().filter(c => canHandle(c, member));
+        const areas = Object.entries(KINDS).filter(([key]) => eligible(key, member.id, [...member.roles.cache.keys()], guild.ownerId));
+        const summary = areas.map(([key, info]) => `**${info.title}:** ${rows.filter(c => c.kind === key).length}`).join("\n");
+        await answer(i, "", { embeds: [embed("GoR · Dein Teamboard", "Deine Zuständigkeiten und die nächsten Aufgaben an einem Ort.")
+          .addFields(
+            { name: "Offene Anliegen", value: String(rows.length), inline: true },
+            { name: "Noch nicht übernommen", value: String(rows.filter(c => c.status === "open" && !c.assignee_id).length), inline: true },
+            { name: "Deine Bearbeitung", value: String(rows.filter(c => c.assignee_id === member.id).length), inline: true },
+            { name: "Deine Bereiche", value: summary || "Keine Fallzuständigkeit" },
+            { name: "Aufmerksamkeit nötig", value: `${rows.filter(c => c.status === "needs_review").length} Fälle müssen geprüft werden.\n${rows.filter(c => now() - c.created >= 86400).length} offene Anliegen wurden vor mindestens 24 Stunden angelegt.` },
+            { name: "Dein Werkzeugkasten", value: "/faelle → Übersicht öffnen\n/uebernehmen → einen zuständigen Fall übernehmen\n/schliessen → eigenen oder zugewiesenen Fall abschließen\nProjektphasen ändern: /projektstatus für die Leitung" },
+          ).toJSON()], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId("gor:queue:v5:1").setLabel("Meine Fallübersicht").setStyle(ButtonStyle.Primary),
+          ).toJSON()] }); break;
       }
-      case "faelle": {
-        if (!Object.keys(KINDS).some(k => eligible(k, member.id, [...member.roles.cache.keys()], guild.ownerId))) throw new UserError("Für die Fallübersicht fehlt die Zuständigkeit.");
-        const rows = store.queue().filter(c => canHandle(c, member));
-        await answer(i, rows.length ? rows.slice(0, 20).map(c => `**${c.id}** · ${KINDS[c.kind].title} · ${c.status} · ${c.assignee_id ? "zugewiesen" : "unzugewiesen"}`).join("\n") + (rows.length > 20 ? `\nWeitere ${rows.length - 20} Fälle vorhanden.` : "") : "Keine für dich zuständigen offenen Fälle."); break;
-      }
+      case "projektstatus": await serial(async () => {
+        leadership(member);
+        const id = i.options.getInteger("fall", true), phase = store.setProjectPhase(id, i.options.getString("phase", true), member.id);
+        await answer(i, `**Projektanfrage #${id}: ${PROJECT_PHASES[phase]}**\nDer Stand ist für den Anfragenden unter /meine_faelle sichtbar. Absprachen, Einrichtung und Freigaben werden mit den Beteiligten geklärt; dieser Befehl verändert keine Server- oder Besitzrechte.`);
+      }); break;
       case "uebernehmen": await serial(async () => {
         const c = store.get(i.options.getInteger("fall", true));
         if (!canHandle(c, member) || c.opener_id === member.id) throw new UserError("Du bist kein unbeteiligter zuständiger Bearbeiter dieses Falls.");
@@ -623,6 +778,34 @@ export async function main(options: { createClient?: () => Client; environment?:
         if (check.content !== panelBody) throw new UserError("Der Bedienfeldinhalt ist noch nicht bestätigt.");
         store.audit(member.id, "panel_publish", message.id); await answer(i, `Supportbedienfeld: ${message.url}`);
       }); break;
+      case "communitypanel": await serial(async () => {
+        own(member); const ch = await textChannel(guild, CHANNELS.start), me = await assertBot(guild);
+        if (!ch.permissionsFor(guild.roles.everyone)?.has(P.ViewChannel)
+            || !ch.permissionsFor(me)?.has([P.ViewChannel, P.SendMessages, P.EmbedLinks, P.ReadMessageHistory]))
+          throw new UserError("Der Startkanal muss für Mitglieder sichtbar und für den Bot beschreibbar sein.");
+        const saved = store.setting("community_panel_message_id"), payload = { ...communityHub(CHANNELS), allowedMentions: MENTIONS };
+        if (saved === "pending") throw new UserError("Die letzte Anlage ist unklar. Bitte das vorhandene Menü mit /communitypanel_zuordnen bestätigen.");
+        let message;
+        if (saved) {
+          message = await ch.messages.fetch(saved);
+          if (message.author.id !== APPLICATION) throw new UserError("Das gespeicherte Community-Menü gehört nicht zum Bot.");
+          await message.edit(payload);
+        } else {
+          store.setting("community_panel_message_id", "pending"); message = await ch.send(payload);
+          store.setting("community_panel_message_id", message.id);
+        }
+        const check = await ch.messages.fetch({ message: message.id, force: true });
+        if (!sameCommunityPanel(check, communityHub(CHANNELS), APPLICATION)) throw new UserError("Das Community-Menü ist noch nicht vollständig bestätigt. Die bestehende Nachricht prüfen.");
+        store.audit(member.id, "community_panel_publish", message.id); await answer(i, `Dein zentrales Community-Menü ist bereit: ${message.url}`);
+      }); break;
+      case "communitypanel_zuordnen": await serial(async () => {
+        own(member); const id = i.options.getString("nachricht", true);
+        if (!/^\d{15,22}$/.test(id)) throw new UserError("Bitte die konkrete Nachrichten-ID verwenden.");
+        const ch = await textChannel(guild, CHANNELS.start), message = await ch.messages.fetch(id);
+        if (!sameCommunityPanel(message, communityHub(CHANNELS), APPLICATION)) throw new UserError("Autor, Inhalt und Schaltflächen passen nicht zum aktuellen GoR Community-Menü.");
+        store.setting("community_panel_message_id", id); store.audit(member.id, "community_panel_recover", id);
+        await answer(i, `Das vorhandene Community-Menü ist bestätigt: ${message.url}`);
+      }); break;
       case "panel_zuordnen": await serial(async () => {
         own(member); const id = i.options.getString("nachricht", true);
         if (!/^\d{15,22}$/.test(id)) throw new UserError("Bitte die konkrete Nachrichten-ID verwenden.");
@@ -631,20 +814,7 @@ export async function main(options: { createClient?: () => Client; environment?:
         if (m.author.id !== APPLICATION || JSON.stringify(ids) !== JSON.stringify(["gor:projekt:v3", "gor:support:v3"])) throw new UserError("Das ist kein passendes GoR Supportbedienfeld.");
         store.setting("panel_message_id", id); store.audit(member.id, "panel_recover", id); await answer(i, "Das vorhandene Supportbedienfeld ist bestätigt.");
       }); break;
-      case "serverpruefen": {
-        leadership(member); const roles = await guild.roles.fetch(), channels = await guild.channels.fetch(), me = await guild.members.fetchMe({ force: true });
-        const missingRoles = Object.keys(ROLES).filter(k => !roles.has(ROLES[k])), missingChannels = Object.keys(CHANNELS).filter(k => !channels.has(CHANNELS[k]));
-        const checks = ["**GoR · Serverprüfung**", `Rollen: ${16 - missingRoles.length}/16 · Kanäle: ${41 - missingChannels.length}/41`,
-          `Community: ${guild.features.includes("COMMUNITY") ? "von Discord bestätigt" : "noch nicht aktiviert"}`,
-          `Regelprüfung: ${guild.features.includes("MEMBER_VERIFICATION_GATE_ENABLED") ? "von Discord bestätigt" : "nicht bestätigt"}`,
-          `Onboarding: ${(guild.features as string[]).includes("GUILD_ONBOARDING_EVER_ENABLED") ? "wurde eingerichtet; aktuellen Ablauf manuell prüfen" : "nicht bestätigt"}`,
-          `Bot: ${[P.ManageChannels, P.ManageRoles, P.ViewChannel, P.SendMessages, P.ReadMessageHistory].every(p => me.permissions.has(p)) ? "Grundrechte vorhanden" : "einzelne Grundrechte fehlen"}`,
-          `Offene oder zu prüfende Fälle: ${settings.storage === "temporary" ? "Fallverwaltung wartet auf das Datenvolume" : store.queue().length}`, `Sicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung fehlt" : store.backupHealthy ? "lokal verfügbar" : "prüfen"}`];
-        if (missingRoles.length) checks.push("Fehlende Rollen: " + missingRoles.join(", "));
-        if (missingChannels.length) checks.push("Fehlende Kanäle: " + missingChannels.join(", "));
-        checks.push("AutoMod, Kanalüberschreibungen und Rollenrangfolge werden durch diese Übersicht nicht als fehlerfrei bestätigt.");
-        await answer(i, checks.join("\n")); break;
-      }
+      case "serverpruefen": await serverReport(i, member); break;
       case "ankuendigung": {
         leadership(member); const op = store.draft(member.id, i.options.getString("ziel", true), i.options.getString("titel", true), i.options.getString("text", true));
         const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(

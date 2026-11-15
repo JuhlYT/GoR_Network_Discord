@@ -20,6 +20,7 @@ Vor externen Änderungen speichert der Bot einen ausstehenden Zustand. Ein unter
 
 - **Fallkanal vorhanden:** Inhaber prüft Kanal, Kategorie und Fallkennung und nutzt `/fall_zuordnen` mit dem bestehenden Kanal.
 - **Supportbedienfeld vorhanden:** mit `/panel_zuordnen` bestätigen.
+- **Community-Menü vorhanden:** mit `/communitypanel_zuordnen` im Startkanal bestätigen; Autor, Karteninhalt und Schaltflächen müssen zum aktuellen Menü passen.
 - **Veröffentlichung unklar:** `/vorgaenge`, den ursprünglichen Zielkanal lesen und eine tatsächlich passende Nachricht mit `/vorgang_zuordnen` bestätigen. Autor, Inhalt und Zeitpunkt müssen passen. Nicht auf Verdacht erneut veröffentlichen.
 
 Ankündigungen bleiben 15 Minuten als private Vorschau verfügbar. Nur ihr Verfasser darf sie veröffentlichen; seine aktuelle Leitungsrolle wird vor der Bestätigung geprüft. Massenbenachrichtigungen sind ausgeschaltet.
@@ -27,6 +28,8 @@ Ankündigungen bleiben 15 Minuten als private Vorschau verfügbar. Nur ihr Verfa
 ## Daten und Sicherungen
 
 `/data/support.sqlite` enthält Metadaten, Einstellungen, Interaktionskennungen und vorbereitete Veröffentlichungstexte. SQLite verwendet WAL und vollständige Synchronisierung. Beim Start läuft eine Integritätsprüfung. Ein fehlendes Railway-Volume führt seit v4.1.1 zu einem eingeschränkten Betrieb statt zu einem Verbindungsabbruch: Orientierung, Status und Rollenwahl funktionieren weiter; Fallverwaltung, Veröffentlichungen, Bedienfeldverwaltung und dauerhafte Sicherungen bleiben pausiert. Ein temporäres Verzeichnis wird nicht als dauerhafte Speicherung ausgegeben.
+
+Version 4.2.0 ergänzt die Tabelle `project_reviews` mit Fallnummer, Phase, handelnder Person und Zeitpunkt. Vorhandene Tabellen und Fallzuordnungen bleiben erhalten. Formularbeschreibungen werden ausschließlich in den privaten Discord-Fallkanal gesendet. Die persönliche Übersicht fragt nur Fälle des angemeldeten Mitglieds auf diesem Server ab; Teamübersichten filtern bei jeder Interaktion nach dessen aktuellen Zuständigkeiten.
 
 Ein angehängtes Volume hat Vorrang vor `GOR_DATA_DIR`. Seit v4.1.4 werden absolute, relative und in äußere Anführungszeichen gesetzte Speicherpfade gemeinsam aufgelöst. Relative Werte beziehen sich im Container auf `/app`: `data` ergibt `/app/data`, `./betrieb` ergibt `/app/betrieb`. Die Datenbank und Sicherungen liegen direkt im aufgelösten Verzeichnis; vorhandene Daten werden nicht verschoben. Den bestehenden Mountpfad für die Reparatur beibehalten. Das Anwendungsverzeichnis selbst, Systemverzeichnisse und symbolische Links sind keine geeigneten Datenverzeichnisse. Nach dem Anbinden des Volumes und einem Neustart wird der vollständige Betrieb verfügbar. `GOR_SUPPORT_ENABLED=false` pausiert den privaten Support weiterhin ausdrücklich; ohne diesen Schalter ist Support mit dauerhafter Datenhaltung aktiviert.
 
@@ -63,3 +66,5 @@ Bei SIGTERM werden laufende verwaltete Änderungen abgewartet und der Dienst sau
 7. Eine Sicherung erstellen und ihre Wiederherstellung zuerst in einer getrennten Testkopie prüfen.
 
 Projektanfragen ermöglichen Gespräche und eine Pilotphase für weitere Spiele und Server. Aufnahme, Partnerschaft, Fusion, Vertragszusagen und Finanzentscheidungen werden von der Leitung getroffen.
+
+Die Abnahme von Community-Menü, privaten Karten und Projektphasen steht in [COMMUNITY.md](COMMUNITY.md).

@@ -1,103 +1,73 @@
-# GoR Network · Discord-Bot
+# GoR Network · Community-Bot
 
-Privater Support, Projektaufnahme, eigene Spielerrollen und Ankündigungen für **GoR Network**. Die Anwendung läuft als dauerhaft verbundener Bot mit Bun und discord.js; die Bot-Datenbank bleibt auf einem eigenen Volume erhalten.
+Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverprojekte. GoR verbindet verschiedene Spiele und Communities unter einem Network.
 
-## Pfadreparatur v4.1.4
+## Neu in Version 4.2.0
 
-Der Fehler `Data directory must be an absolute path` ist behoben: Relative Datenpfade werden jetzt gegen das Arbeitsverzeichnis des Bots aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Äußere Anführungszeichen und abschließende Schrägstriche werden bereinigt. Absolute Pfade bleiben am bisherigen Ort. Startskript und Bot verwenden dieselbe Pfadauflösung aus `storage_path.ts`; die Datenbank wird nicht verschoben.
+- **Zentrales Community-Menü:** acht Schaltflächen für Einstieg, Spiele, Rollen, Hilfe, Projektaufnahme, FAQ, eigene Anliegen und Unterstützung. Einheitliche Karten, klare Anlaufstellen und private Navigation.
+- **Persönlicher Einstieg:** `/start` und `/hilfe` führen in drei Schritten zu Regeln, Mitspielern und Möglichkeiten zum Mitgestalten. `/faq` beantwortet typische Fragen, auf Wunsch zu einem bestimmten Thema.
+- **Deine Anliegen:** `/meine_faelle` zeigt Mitgliedern ausschließlich ihre letzten zehn eigenen Anfragen einschließlich Bearbeitung und Projektphase.
+- **Teamboard:** `/team` zeigt zuständige Fälle, unübernommene Anliegen und zu prüfende Vorgänge. `/faelle` bietet Seiten, Aktualisierung und verständliche Fallstände.
+- **Aufnahme neuer Gameserver:** fünf klare Formularfelder und sechs nachvollziehbare Aufnahmephasen. Alle Spiele sind willkommen; die Leitung entscheidet über die Zusammenarbeit.
+- **Konkrete Serverprüfung:** Rollen, Kategorien, Kanäle, Botrechte, Rangfolge der Auswahlrollen, Community-Funktionen und lokaler Sicherungsstand werden übersichtlich angezeigt.
 
-Die Containerprüfungen starten den Bot mit absoluten, relativen und zitierten Pfaden, schreiben einen Prüfwert in die Datenbank und bestätigen ihn nach dem Neustart. Aufgelöste System- und Anwendungsverzeichnisse sowie symbolische Links bleiben als Speicherziel gesperrt.
+## Das Menü auf deinem Discord aktivieren
 
-### Startkorrekturen seit v4.1.3
+Nach dem bestätigten Botstart als **Discord-Inhaber** einmal `/communitypanel` ausführen. Der Bot legt das Menü im vorhandenen Startkanal an. Erneutes Ausführen aktualisiert dieselbe gespeicherte Nachricht. `/supportpanel` richtet wie bisher das Bedienfeld im Supportkanal ein.
 
-Ohne Token beendet sich der Dienst jetzt mit Fehlercode 1 statt als unverbundener HTTP-Prozess weiterzulaufen. Auch ein Verbindungsaufbau, der innerhalb von 120 Sekunden nicht bestätigt wird, endet mit einer eindeutigen Diagnose. Token und fremde Fehlermeldungen werden nicht protokolliert.
+Mitglieder starten über `/start` oder die Schaltflächen. Ein öffentlicher Klick öffnet eine persönliche Ansicht; die Navigation darin aktualisiert diese Ansicht. Öffentliche Karten werden dabei nicht durch persönliche Inhalte ersetzt.
 
-Jeder Start nennt seine Version (`service_starting`) und die erreichten Phasen: Datenbank geöffnet, Gesundheitsroute gestartet, Discord-Verbindung begonnen, Gateway verbunden, Anwendung wird geprüft und Zielserver wird geprüft. Erst `discord_ready` bestätigt den vollständigen Verbindungsaufbau. `commands_registered` bestätigt anschließend die Befehle. Fehlende Dateirechte, nicht erreichbare Datenbanken, ungültige Token und Verbindungszeitüberschreitungen erhalten feste Diagnosecodes. Die Tests prüfen ausdrücklich, dass fehlgeschlagene Starts nicht als bereit gemeldet werden.
-
-Wenn der Bot weiterhin offline bleibt, die aktuellen **Deploy Logs** ab `service_starting` prüfen. Ein erfolgreicher Build oder GitHub-Deploymentstatus allein bestätigt den Discord-Login nicht. Für eine Fehleranalyse reichen die letzten 20–40 Startzeilen; keine Variablenwerte oder Token weitergeben.
-
-### Volume-Reparatur seit v4.1.2
-
-Der Container akzeptiert jetzt auch eigene absolute Volume-Mountpfade, etwa `/gor-storage` oder `/var/lib/gor-network`. Die bisherige Beschränkung auf drei Pfade hat einen Neustartkreislauf ausgelöst und wurde entfernt. Abschließende Schrägstriche werden normalisiert; vorhandene Daten bleiben am gewählten Speicherort. Systemverzeichnisse, das Anwendungsverzeichnis selbst und symbolische Links werden nicht als Datenverzeichnis verwendet. Die Containerprüfung startet den Bot auch mit abweichenden Mountpfaden und prüft den tatsächlichen Datenbankpfad.
-
-### Weitere Startkorrekturen seit v4.1.1
-
-Der Discord-Verbindungsaufbau ist jetzt von zusätzlichen Betriebsprüfungen getrennt:
-
-- Der Token wird als `GOR_DISCORD_BOT_TOKEN`, `DISCORD_TOKEN`, `DISCORD_BOT_TOKEN`, `BOT_TOKEN` oder `TOKEN` erkannt. Ein versehentlicher `Bot `-Präfix und äußere Anführungszeichen werden entfernt. Der Wert wird nie ausgegeben.
-- Ein fehlendes Railway-Volume verhindert die Verbindung nicht mehr. Der Bot läuft dann eingeschränkt mit Orientierung, Status und Rollenwahl. Fälle und Veröffentlichungen bleiben bis zur Anbindung eines dauerhaften Volumes gesperrt.
-- Bestehendes Administratorrecht wird gemeldet, beendet den Bot aber nicht mehr. Die feste Bindung an Anwendung und Server sowie alle Nutzer- und Rollenprüfungen bleiben erhalten.
-- Eine fehlgeschlagene Befehlsregistrierung schaltet den Bot nicht mehr offline. Die Registrierung wird erneut versucht; andere vorhandene Anwendungsbefehle bleiben erhalten.
-- Startfehler erhalten feste Diagnosecodes und Hinweise, ohne Zugangsdaten oder Discord-Anfrageinhalte auszugeben.
-
-Nach einem automatischen GitHub-Deploy startet die neue Fassung über den vorhandenen Dockerfile. Im Laufzeitprotokoll bestätigt `discord_ready` die geprüfte Verbindung; `commands_registered` bestätigt die Befehle.
-
-**Quellcode und Bereitstellungskonfiguration allein bedeuten noch keinen laufenden Bot.** Für den Start werden ein nutzbares Railway-Konto, der Bot-Token als geschützte Variable und die unten beschriebene Abnahme benötigt.
-
-## Funktionen
-
-| Bereich | Verhalten |
-| --- | --- |
-| Einstieg | Orientierung, Status und Informationen zur freiwilligen Unterstützung |
-| Support | Fünf Anliegenarten, private Fallkanäle, Zuständigkeiten, Übernahme und Abschluss |
-| Network | Projektanfragen als Einstieg für neue Spiele und Serverprojekte |
-| Rollen | Fünf feste Spiel- und Benachrichtigungsrollen mit Rechteprüfung |
-| Ankündigungen | Private Vorschau, persönliche Bestätigung, drei feste Zielkanäle |
-| Betrieb | Wiederverbindung, Gesundheitsprüfung, Verbindungswächter und sauberes Beenden |
-| Daten | SQLite auf dauerhaftem Volume, konsistente Sicherungen und Wiederaufnahme nach Abbrüchen |
-
-Es werden keine Nachrichtentexte mitgelesen. Supportantworten und Aufnahmeentscheidungen übernimmt das zuständige Team. Der Bot löst keine Zahlungen aus und verändert keine Finanzierungszwecke.
-
-## Railway starten
-
-1. In einem eigenen GoR-Projekt einen Dienst aus **JuhlYT/GoR_Network_Discord**, Branch **main**, verbinden. Railway erkennt den Dockerfile im Hauptordner. Der Container bringt die Startanweisung mit; keine abweichende Startanweisung eintragen.
-2. Ein dauerhaftes Volume mit zunächst **500 MB** am Pfad **`/data`** an diesen Dienst anschließen. Genau **eine Replik** verwenden und den Schlafmodus ausschalten.
-3. Die folgenden Variablen im Dienst setzen. Einen vorhandenen versiegelten Token nicht erneut anlegen oder überschreiben.
-
-| Variable | Wert |
-| --- | --- |
-| `GOR_DISCORD_BOT_TOKEN` | Gültiger Bot-Token; alternativ wird eine der oben genannten Tokenvariablen verwendet |
-| `GOR_DATA_DIR` | `/data` |
-| `GOR_SUPPORT_ENABLED` | `true` nach der Vorbereitung der Zuständigkeiten |
-
-`PORT` wird von Railway bereitgestellt. Keine Zugangsdaten in GitHub-Dateien, Issues oder Commitnachrichten speichern.
-
-4. Gesundheitsroute **`/health`**, Startfrist **120 Sekunden**, Neustart bei Fehlern mit **10 Versuchen**, keine parallelen alten und neuen Instanzen und **15 Sekunden** Beendigungsfrist einstellen. Beim eingebauten Containerstart werden die Volume-Rechte vorbereitet; der Bot selbst läuft als Benutzer `bun`. `/data` ist der empfohlene Mountpfad. Eigene absolute und relative Speicherpfade werden ebenfalls unterstützt; relative Werte beziehen sich im Container auf `/app`. Das tatsächlich angehängte Volume hat Vorrang vor einem veralteten Datenpfad. Den vorhandenen Mountpfad für diese Reparatur nicht ändern; so bleibt die bestehende Datenbank am bisherigen Ort.
-5. Deploymentzustand **SUCCESS**, Protokollereignis **`discord_ready`** und `/health` = **200** bestätigen. Danach die Discord-Abnahme durchführen. Eine öffentliche Domain wird für die Gateway-Verbindung nicht benötigt.
-
-Die entsprechende Railway-Konfiguration steht unter `.railway/railway.ts`. Sie verwendet Infrastructure as Code und verwaltet mit dem Partial `gor-discord-bot` nur die zugehörigen Ressourcen. Vor einem Apply immer den Plan lesen. Der Ausdruck `preserve()` erhält einen bereits geschützten Token; er enthält und erzeugt keinen Zugang. Die Datei ersetzt keine Kontofreischaltung und keine sichere Tokenhinterlegung.
-
-```sh
-railway config plan
-railway config apply
-```
-
-Diese Befehle erst im zugehörigen GoR-Projekt verwenden. Bei unerwarteten Änderungen den Plan prüfen; keine Löschfreigabe auf Verdacht hinzufügen.
-
-## Discord vorbereiten
-
-Der Bot ist fest an die GoR-Anwendung `1571174833025450064` und den Server `1571171516677361704` gebunden. Für seine Verwaltungsfunktionen benötigt er folgende Einzelrechte: Kanäle sehen, Nachrichten senden, Links einbetten, Nachrichtenverlauf lesen, Kanäle verwalten und Rollen verwalten. Die Botrolle muss oberhalb der fünf auswählbaren Rollen liegen. Administratorrecht ist nicht erforderlich. Eine falsche Anwendung wird weiterhin abgewiesen.
-
-Privilegierte Gateway-Intents für Mitglieder, Präsenz und Nachrichteninhalte bleiben ausgeschaltet. Die vorhandenen Rollen und Kanäle werden anhand ihrer IDs verwendet. Der Bot erstellt nicht den kompletten Server erneut.
-
-Nach dem ersten erfolgreichen Start führt der Inhaber `/supportpanel` aus. Bei einer unklaren früheren Anlage zuerst das vorhandene Bedienfeld mit `/panel_zuordnen` bestätigen.
+Wenn eine frühere Anlage unklar ist, zuerst die bereits vorhandene Nachricht mit `/communitypanel_zuordnen` beziehungsweise `/panel_zuordnen` bestätigen. Vorhandene Community-Kanäle, Mitgliedsrollen und Gesprächsverläufe werden weiterverwendet.
 
 ## Befehle
 
 | Mitglieder | Zuständige Betreuung | Network-/Communityleitung | Inhaber |
 | --- | --- | --- | --- |
-| `/hilfe` | `/faelle` | `/serverpruefen` | `/fall_zuordnen` |
-| `/status` | `/uebernehmen` | `/ankuendigung` | `/supportpanel` |
-| `/support` | `/schliessen` gemäß Fallzuordnung | | `/panel_zuordnen` |
-| `/projektanfrage` | | | `/vorgaenge` |
-| `/rollen` | | | `/vorgang_zuordnen` |
-| `/unterstuetzen` | | | `/backup` |
+| `/start`, `/hilfe`, `/faq` | `/team`, `/faelle` | `/projektstatus` | `/communitypanel` |
+| `/rollen`, `/status` | `/uebernehmen` | `/serverpruefen` | `/communitypanel_zuordnen` |
+| `/support`, `/meine_faelle` | `/schliessen` gemäß Fallzuordnung | `/ankuendigung` | `/supportpanel`, `/panel_zuordnen` |
+| `/projektanfrage` | | | `/fall_zuordnen` |
+| `/unterstuetzen` | | | `/vorgaenge`, `/vorgang_zuordnen`, `/backup` |
 
-Ein Anfragender darf seinen eigenen Fall ebenfalls abschließen. Der Inhaber kann alle Anliegenarten bearbeiten. Andere bestehende Anwendungsbefehle werden beim Start nicht pauschal gelöscht.
+Die Rechte werden bei jeder Interaktion frisch geprüft. Die Teamübersichten enthalten nur Fälle aus der jeweiligen Zuständigkeit; Zahlungsanliegen bleiben bei Finanzzuständigkeit oder Inhaber. Der Anfragende darf seinen eigenen Fall ebenfalls abschließen.
+
+## Projekte in GoR aufnehmen
+
+Das Formular fragt nach Projektname, Spiel und Modus, aktuellem Stand, gewünschter Zusammenarbeit und einem optionalen öffentlichen Kontaktlink. Die Angaben landen im privaten Fallkanal. In der Bot-Datenbank stehen Zuordnung und Phase, keine Formularbeschreibungen.
+
+**Neu → Prüfung → Gespräch → Pilotphase → Aufnahmeentscheidung.** Eine Ablehnung ist in jeder laufenden Phase möglich. Die Leitung kann eine noch offene Anfrage aus einer Entscheidung wieder in die Prüfung nehmen. Eigene Projektanfragen müssen durch eine andere zuständige Leitung geprüft werden.
+
+Mit `/projektstatus fall:… phase:…` schreibt die Leitung den Stand fort. Mitglieder sehen ihn in `/meine_faelle`. Über Besitzrechte, Serverzugriffe, Kosten und konkrete Zusammenarbeit wird mit den Beteiligten entschieden; der Phasenbefehl richtet keine fremden Server ein.
+
+Der ausführliche Ablauf steht in [docs/COMMUNITY.md](docs/COMMUNITY.md).
+
+## Railway betreiben
+
+Der Dienst verwendet das Repository **JuhlYT/GoR_Network_Discord**, Branch **main**, und den Dockerfile im Hauptordner. Die geschützten Variablen und das bestehende Volume beim Update beibehalten. Der Container enthält die Startanweisung.
+
+| Einstellung | Wert |
+| --- | --- |
+| Laufzeit | Bun 1.4.4, festgelegte Produktionsabhängigkeiten |
+| Bot-Token | `GOR_DISCORD_BOT_TOKEN`; alternativ `DISCORD_TOKEN`, `DISCORD_BOT_TOKEN`, `BOT_TOKEN` oder `TOKEN` |
+| Daten | dauerhaftes Volume, empfohlen `/data`; eine Replik |
+| Privater Support | mit dauerhaftem Speicher standardmäßig aktiv; `GOR_SUPPORT_ENABLED=false` pausiert neue Fälle |
+| Gesundheitsprüfung | `/health`, Startfrist 120 Sekunden |
+| Neustart | bei Fehler, zehn Versuche; Schlafmodus aus |
+| Beendigung | keine parallelen alten und neuen Instanzen; 15 Sekunden Beendigungsfrist |
+
+Relative und zitierte Datenpfade werden einheitlich aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Absolute Pfade bleiben am bisherigen Ort. Ein fehlendes Volume erlaubt Orientierung und Rollenwahl; private Fälle, Veröffentlichungen und dauerhafte Verwaltung bleiben bis zur Vorbereitung pausiert.
+
+`service_starting` nennt die Version. Erst **`discord_ready`** bestätigt die geprüfte Discord-Verbindung; **`commands_registered`** bestätigt die Befehle. Ein grüner Build allein bestätigt den Login nicht. Fehlende Token und nicht rechtzeitig bestätigte Verbindungen beenden den Start mit einem festen Diagnosecode. Tokenwerte und fremde Fehlerkörper werden nicht protokolliert.
+
+Die optionale Infrastructure-as-Code-Konfiguration steht unter `.railway/railway.ts`. Ein Apply gehört nur in das zugehörige GoR-Projekt, nachdem der Plan geprüft wurde; ein bestehender versiegelter Token wird mit `preserve()` erhalten.
+
+## Discord-Bindung und Rechte
+
+Die Anwendung ist an Bot `1571174833025450064` und Server `1571171516677361704` gebunden. Für die Verwaltungsfunktionen benötigt sie Kanäle sehen, Nachrichten senden, Links einbetten, Verlauf lesen, Kanäle verwalten und Rollen verwalten. Die Botrolle muss über den auswählbaren Rollen stehen.
+
+Der Bot verwendet ausschließlich den Gateway-Intent für Server. Privilegierte Mitglieder-, Präsenz- und Nachrichteninhalts-Intents sind nicht erforderlich. Nachrichtenverläufe werden nicht zum Trainieren oder automatischen Moderieren mitgelesen. Unterstützung ist freiwillig; Zugehörigkeit hängt von keiner Zahlung ab.
 
 ## Prüfen und entwickeln
-
-Getestete Laufzeit: **Bun 1.4.4**. Abhängigkeiten und Containerbasis sind festgelegt.
 
 ```sh
 bun install --frozen-lockfile
@@ -105,8 +75,6 @@ bun run check
 bun run smoke
 ```
 
-Die CI prüft Typen, Fallzustände, Neustarts, Zuständigkeiten, Kanalzugriffe, Doppelklicks, Veröffentlichungskontrolle und Backup-Wiederherstellung. Prozess- und Containertests prüfen zusätzlich Tokenalias, fehlendes Volume, vorhandenes Administratorrecht und fehlgeschlagene Befehlsregistrierung. Die Discord-Gegenstelle ist dabei ausdrücklich simuliert, Zugangsdaten werden nicht benötigt. HTTP-Prozess, Containerentrypoint, Benutzerwechsel und SIGTERM laufen tatsächlich. Ein Live-Funktionstest auf Discord wird dadurch nicht ersetzt.
+Die Prüfungen decken Datenbankerweiterung, Wiederaufnahme, Fallzustände, private Zugriffe, Projektentscheidungen, Karten- und Befehlsgrenzen, doppelte Veröffentlichungen sowie die tatsächlichen Interaktionswege ab. Die CI baut zusätzlich den Produktionscontainer und prüft absolute, relative und zitierte Speicherpfade samt erhaltenem Datenbankinhalt nach einem Neustart.
 
-Für einen lokalen Start `GOR_DATA_DIR` auf ein eigenes Datenverzeichnis setzen und den Token geschützt in die Prozessumgebung geben. `bun run start` startet den Bot. Eine gleichzeitige zweite Instanz derselben Anwendung vermeiden.
-
-Die ausführliche Datenhaltung und Abnahme stehen in [docs/BETRIEB.md](docs/BETRIEB.md).
+Die Discord-Gegenstelle ist in den automatischen Prüfungen simuliert. Die Live-Abnahme auf dem Zielserver steht in [docs/BETRIEB.md](docs/BETRIEB.md).
