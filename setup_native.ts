@@ -5,7 +5,7 @@ import { setupError, type AutoSetup } from "./auto_setup";
 const REASON = "GoR automatische Community-Einrichtung";
 const DESCRIPTION = "GoR Network – gemeinsam spielen, eigene Projekte entwickeln und als Community wachsen. Alle Spiele sind willkommen.";
 function list(value: any): any[] { return Array.isArray(value) ? value : value?.values ? [...value.values()] : []; }
-function ids(value: any): string[] { return Array.isArray(value) ? value : value?.keys ? [...value.keys()] : []; }
+function ids(value: any): string[] { return Array.isArray(value) ? [...value] : value?.keys ? [...value.keys()] : []; }
 export function onboardingShape(input: any) {
   return JSON.stringify({ enabled: input.enabled, mode: input.mode,
     defaults: ids(input.defaultChannels ?? input.defaultChannelIds).sort(),
