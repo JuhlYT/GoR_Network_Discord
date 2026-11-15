@@ -18,5 +18,5 @@ jobs:
       - run: bun run smoke
       - name: Build production container
         run: docker build --tag gor-network-check .
-      - name: Verify production startup with and without volume
+      - name: Verify production startup, custom volume paths and restarts
         run: python3 scripts/container_smoke.py

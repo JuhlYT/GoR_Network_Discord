@@ -1,4 +1,4 @@
-/** GoR Network bot, v4.1.1. Repository and container deployment (Bun).
+/** GoR Network bot, v4.1.2. Repository and container deployment (Bun).
  * No tokens, message-content intent, blanket command deletion or automatic server rebuild.
  * A persistent volume is required for case and publication management, not for connecting.
  */
@@ -13,7 +13,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.1.1";
+export const VERSION = "4.1.2";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {

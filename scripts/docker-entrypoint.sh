@@ -2,16 +2,43 @@
 set -eu
 umask 077
 
-# Railway mounts volumes as root. Prepare only this bot's known files, then drop root.
-data_dir=${RAILWAY_VOLUME_MOUNT_PATH:-${GOR_DATA_DIR:-/data}}
-case "$data_dir" in
-  /data|/app/data|/app/betrieb) ;;
-  *) echo 'Data volume must be mounted at /data, /app/data or /app/betrieb.' >&2; exit 1 ;;
-esac
+# Railway allows a custom mount path. Resolve it before preparing permissions;
+# never change ownership of application code, system directories or symlink targets.
+data_dir=$(bun -e '
+  const { isAbsolute, join, resolve } = require("node:path");
+  const { lstatSync } = require("node:fs");
+  const fail = message => { console.error(message); process.exit(1); };
+  const configured = process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim()
+    || process.env.GOR_DATA_DIR?.trim() || "/data";
+  if (!isAbsolute(configured)) fail("Data directory must be an absolute path, for example /data or /gor-storage.");
+  if (configured.split("/").includes("..")) fail("Data directory must not contain parent-directory segments.");
+  const directory = resolve(configured);
+  const system = ["/bin", "/sbin", "/lib", "/lib64", "/usr", "/etc", "/dev", "/proc", "/sys", "/run"];
+  const roots = ["/", "/app", "/var", "/var/lib", "/tmp", "/home", "/root", "/opt", "/mnt", "/media"];
+  if (roots.includes(directory) || directory === process.cwd()
+      || system.some(root => directory === root || directory.startsWith(root + "/"))
+      || directory === "/app/node_modules" || directory.startsWith("/app/node_modules/"))
+    fail("Data directory must be a dedicated storage directory, not an application or system directory.");
+  let parent = "/";
+  for (const segment of directory.split("/").filter(Boolean)) {
+    parent = join(parent, segment);
+    try {
+      const stat = lstatSync(parent);
+      if (stat.isSymbolicLink()) fail("Data directory and its parents must not be symbolic links.");
+      if (!stat.isDirectory()) fail("Data directory path must contain directories only.");
+    } catch (error) {
+      if (error.code === "ENOENT") break;
+      fail("Data directory could not be inspected. Check its access permissions.");
+    }
+  }
+  console.log(directory);
+')
 export GOR_DATA_DIR="$data_dir"
 if [ "$(id -u)" = 0 ]; then
   if [ -L "$data_dir" ]; then echo 'Data directory must not be a symbolic link.' >&2; exit 1; fi
-  mkdir -p "$data_dir"
+  # Newly created parent directories must be traversable after dropping root.
+  # The actual data directory is restricted before the bot can write any data.
+  (umask 022; mkdir -p "$data_dir")
   chown bun:bun "$data_dir"
   chmod 700 "$data_dir"
   for name in support.sqlite support.sqlite-wal support.sqlite-shm; do
