@@ -2,7 +2,15 @@
 
 Privater Support, Projektaufnahme, eigene Spielerrollen und Ankündigungen für **GoR Network**. Die Anwendung läuft als dauerhaft verbundener Bot mit Bun und discord.js; die Bot-Datenbank bleibt auf einem eigenen Volume erhalten.
 
-## Reparatur v4.1.2
+## Startkorrekturen v4.1.3
+
+Ohne Token beendet sich der Dienst jetzt mit Fehlercode 1 statt als unverbundener HTTP-Prozess weiterzulaufen. Auch ein Verbindungsaufbau, der innerhalb von 120 Sekunden nicht bestätigt wird, endet mit einer eindeutigen Diagnose. Token und fremde Fehlermeldungen werden nicht protokolliert.
+
+Jeder Start nennt seine Version (`service_starting`) und die erreichten Phasen: Datenbank geöffnet, Gesundheitsroute gestartet, Discord-Verbindung begonnen, Gateway verbunden, Anwendung wird geprüft und Zielserver wird geprüft. Erst `discord_ready` bestätigt den vollständigen Verbindungsaufbau. `commands_registered` bestätigt anschließend die Befehle. Fehlende Dateirechte, nicht erreichbare Datenbanken, ungültige Token und Verbindungszeitüberschreitungen erhalten feste Diagnosecodes. Die Tests prüfen ausdrücklich, dass fehlgeschlagene Starts nicht als bereit gemeldet werden.
+
+Wenn der Bot weiterhin offline bleibt, die aktuellen **Deploy Logs** ab `service_starting` prüfen. Ein erfolgreicher Build oder GitHub-Deploymentstatus allein bestätigt den Discord-Login nicht. Für eine Fehleranalyse reichen die letzten 20–40 Startzeilen; keine Variablenwerte oder Token weitergeben.
+
+### Volume-Reparatur seit v4.1.2
 
 Der Container akzeptiert jetzt auch eigene absolute Volume-Mountpfade, etwa `/gor-storage` oder `/var/lib/gor-network`. Die bisherige Beschränkung auf drei Pfade hat einen Neustartkreislauf ausgelöst und wurde entfernt. Abschließende Schrägstriche werden normalisiert; vorhandene Daten bleiben am gewählten Speicherort. Systemverzeichnisse, das Anwendungsverzeichnis selbst und symbolische Links werden nicht als Datenverzeichnis verwendet. Die Containerprüfung startet den Bot auch mit abweichenden Mountpfaden und prüft den tatsächlichen Datenbankpfad.
 

@@ -124,6 +124,9 @@ describe("Railway-Startkonfiguration", () => {
     expect(JSON.stringify(errorDiagnostic(raw))).not.toContain("fixture-secret");
     expect(JSON.stringify(errorDiagnostic({ message: "fixture-secret" }))).not.toContain("fixture-secret");
     expect(errorDiagnostic({ status: 401 }).code).toBe("token_invalid");
+    expect(errorDiagnostic({ code: "startup_timeout" }).code).toBe("startup_timeout");
+    expect(errorDiagnostic({ code: "EACCES", path: "fixture-secret" }).code).toBe("storage_permissions");
+    expect(JSON.stringify(errorDiagnostic({ code: "SQLITE_CANTOPEN", path: "fixture-secret" }))).not.toContain("fixture-secret");
   });
 });
 

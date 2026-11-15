@@ -32,9 +32,12 @@ class FixtureClient extends EventEmitter {
   isReady() { return this.connected; }
   async login(token: string) {
     if (token !== "fixture-not-a-real-discord-token") throw new Error("Unexpected fixture credential");
+    if (Bun.env.GOR_FIXTURE_INVALID_TOKEN === "true") throw Object.assign(new Error("private-fixture-body"), { code: "TokenInvalid" });
+    if (Bun.env.GOR_FIXTURE_HANG === "true") return new Promise<string>(() => {});
     this.connected = true; this.emit(Events.ClientReady); return token;
   }
   async destroy() { this.connected = false; }
 }
 
-await main({ createClient: () => new FixtureClient() as unknown as Client });
+await main({ createClient: () => new FixtureClient() as unknown as Client,
+  startupTimeoutMs: Bun.env.GOR_FIXTURE_HANG === "true" ? 300 : undefined });

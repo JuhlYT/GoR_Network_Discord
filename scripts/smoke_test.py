@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test startup without credentials, plus four explicitly mocked Discord startup scenarios."""
+"""Test fail-fast startup and readiness with an explicitly mocked Discord gateway."""
 import argparse
 import json
 import os
@@ -17,7 +17,7 @@ def run_scenario(root, bun, port, scenario):
         env = os.environ.copy()
         for key in ('GOR_DISCORD_BOT_TOKEN', 'DISCORD_TOKEN', 'DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'TOKEN',
                     'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_VOLUME_MOUNT_PATH', 'GOR_FIXTURE_ADMIN',
-                    'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP'):
+                    'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG'):
             env.pop(key, None)
         env.update(PORT=str(port), GOR_DATA_DIR=data, GOR_SUPPORT_ENABLED='false')
         mocked = scenario != 'missing-token'
@@ -31,19 +31,28 @@ def run_scenario(root, bun, port, scenario):
                 env['GOR_FIXTURE_SYNC_ERROR'] = 'true'
             if scenario == 'wrong-application':
                 env['GOR_FIXTURE_WRONG_APP'] = 'true'
+            if scenario == 'invalid-token':
+                env['GOR_FIXTURE_INVALID_TOKEN'] = 'true'
+            if scenario == 'connection-timeout':
+                env['GOR_FIXTURE_HANG'] = 'true'
         entry = 'tests/fixtures/startup.ts' if mocked else 'gor_network.ts'
         process = subprocess.Popen([bun, 'run', entry], cwd=root, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         results = []
         try:
-            if scenario == 'wrong-application':
+            rejected = {'missing-token': 'configuration_token_missing', 'wrong-application': 'wrong_application',
+                        'invalid-token': 'token_invalid', 'connection-timeout': 'startup_timeout'}
+            if scenario in rejected:
                 stdout, stderr = process.communicate(timeout=10)
                 logs = stdout + stderr
-                if process.returncode != 1 or 'wrong_application' not in logs:
-                    raise AssertionError('A wrong bot application was not stopped')
+                if process.returncode != 1 or rejected[scenario] not in logs:
+                    raise AssertionError('Startup failure was not reported and stopped: ' + scenario)
+                if 'discord_ready' in logs:
+                    raise AssertionError('A failed startup was reported as ready')
                 if 'fixture-not-a-real-discord-token' in logs or 'private-fixture-body' in logs:
                     raise AssertionError('Private credential or error body leaked')
-                return {'scenario': scenario, 'discord': 'mocked', 'wrong_application': 'blocked'}
+                return {'scenario': scenario, 'discord': 'mocked' if mocked else 'not_contacted',
+                        'exit': process.returncode, 'diagnostic': rejected[scenario]}
             deadline = time.monotonic() + 15
             while True:
                 try:
@@ -53,8 +62,7 @@ def run_scenario(root, bun, port, scenario):
                     if process.poll() is not None or time.monotonic() > deadline:
                         raise RuntimeError('Health listener did not start')
                     time.sleep(.1)
-            expected_health = 200 if mocked else 503
-            for route, wanted in (('/live', 200), ('/health', expected_health), ('/support.sqlite', 404)):
+            for route, wanted in (('/live', 200), ('/health', 200), ('/support.sqlite', 404)):
                 deadline = time.monotonic() + 10
                 while True:
                     with socket.create_connection(('127.0.0.1', port), timeout=3) as connection:
@@ -71,9 +79,7 @@ def run_scenario(root, bun, port, scenario):
                     raise AssertionError(f'{route}: expected {wanted}, got {status}')
                 if route == '/health':
                     health = json.loads(body)
-                    if not mocked and health['status'] != 'token_missing':
-                        raise AssertionError('Missing credential was reported as ready')
-                    if mocked and health['status'] != 'ready':
+                    if health['status'] != 'ready':
                         raise AssertionError('A connected fixture was not ready')
                     if scenario == 'railway-no-volume' and health['storage'] != 'temporary':
                         raise AssertionError('Missing volume was reported as persistent')
@@ -84,8 +90,7 @@ def run_scenario(root, bun, port, scenario):
             logs = stdout + stderr
             if process.returncode != 0:
                 raise AssertionError('Process did not shut down cleanly')
-            expected_event = 'discord_ready' if mocked else 'configuration_token_missing'
-            if expected_event not in logs:
+            if 'discord_ready' not in logs:
                 raise AssertionError('Expected startup state was not reached')
             if mocked and 'fixture_presence_online' not in logs:
                 raise AssertionError('Connected fixture did not set its online presence')
@@ -114,7 +119,8 @@ def main():
     if not args.bun:
         parser.error('Bun is required; pass --bun /absolute/path/to/bun')
     root = Path(__file__).resolve().parent.parent
-    scenarios = ['missing-token', 'railway-no-volume', 'railway-admin', 'command-sync-failure', 'wrong-application']
+    scenarios = ['missing-token', 'invalid-token', 'connection-timeout', 'railway-no-volume', 'railway-admin',
+                 'command-sync-failure', 'wrong-application']
     results = [run_scenario(root, args.bun, args.port, scenario) for scenario in scenarios]
     print(json.dumps({'smoke_test': 'passed', 'scenarios': results}))
 

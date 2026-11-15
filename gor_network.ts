@@ -1,4 +1,4 @@
-/** GoR Network bot, v4.1.2. Repository and container deployment (Bun).
+/** GoR Network bot, v4.1.3. Repository and container deployment (Bun).
  * No tokens, message-content intent, blanket command deletion or automatic server rebuild.
  * A persistent volume is required for case and publication management, not for connecting.
  */
@@ -13,7 +13,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.1.2";
+export const VERSION = "4.1.3";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -95,6 +95,11 @@ export function requireStorage(settings: ReturnType<typeof runtimeSettings>, act
 }
 export function errorDiagnostic(error: any) {
   const code = error?.code ?? error?.cause?.code;
+  if (code === "startup_timeout") return { code, hint: "Die Discord-Verbindung wurde innerhalb von 120 Sekunden nicht bestätigt. Die letzte Startphase und den Netzwerkzugriff auf Discord prüfen." };
+  if (code === "EACCES" || code === "EPERM" || code === "SQLITE_READONLY")
+    return { code: "storage_permissions", hint: "Das Datenverzeichnis oder die Datenbank ist nicht beschreibbar. Volume-Zugriff und Containerstart prüfen." };
+  if (["SQLITE_CANTOPEN", "SQLITE_NOTADB", "SQLITE_CORRUPT"].includes(code))
+    return { code: "database_unavailable", hint: "Die Bot-Datenbank konnte nicht geöffnet oder geprüft werden. Volume und Sicherung prüfen; vorhandene Daten nicht löschen." };
   if (code === "wrong_application") return { code, hint: "Der Token gehört nicht zur vorgesehenen GoR-Anwendung. Den richtigen Bot-Token verwenden." };
   if (code === "wrong_guild" || code === 10004 || code === 50001) return { code: "guild_access_missing", hint: "Der Bot benötigt Zugriff auf den vorgesehenen GoR-Server. Einladung und applications.commands prüfen." };
   if (code === 50013) return { code: "permissions_missing", hint: "Discord verweigert einzelne Rechte. Botrolle, Kanalrechte und Befehlsfreigabe prüfen." };
@@ -373,8 +378,9 @@ export function healthResponse(path: string, ready: boolean, dbOk: boolean, stat
     { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv } = {}) {
+export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv; startupTimeoutMs?: number } = {}) {
   process.umask(0o077);
+  console.log(JSON.stringify({ at: new Date().toISOString(), event: "service_starting", version: VERSION }));
   const env = options.environment || Bun.env;
   const settings = runtimeSettings(env);
   if (settings.storage === "temporary") safeLog("storage_temporary_support_paused");
@@ -382,32 +388,35 @@ export async function main(options: { createClient?: () => Client; environment?:
     safeLog("data_directory_uses_attached_volume");
   safeLog("database_opening");
   const store = new Store(settings.directory);
+  safeLog("database_opened");
   const client = options.createClient?.() || new Client({ intents: [GatewayIntentBits.Guilds], allowedMentions: MENTIONS,
     rest: { retries: 0, timeout: 15_000 } });
   let ready = false, verified = false, commandsReady = false, commandsSyncing = false;
   let state = "starting", stopped = false, lastHealthy = Date.now(), administratorReported = false;
   let maintenance: ReturnType<typeof setTimeout> | undefined;
+  let startupDeadline: ReturnType<typeof setTimeout> | undefined;
   const server = Bun.serve({ hostname: "0.0.0.0", port: Number(env.PORT || 8080),
     fetch(request) { let dbOk = false; try { dbOk = store.health(); } catch {}
       return healthResponse(new URL(request.url).pathname, ready && client.isReady(), dbOk, state,
         { storage: settings.storage, commands: commandsReady ? "registered" : "pending" }); } });
+  safeLog("health_listener_started");
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T,>(fn: () => Promise<T>) => {
     const task = queue.then(fn); queue = task.catch(() => {}); return task;
   };
   async function shutdown(code: number) {
-    if (stopped) return; stopped = true; ready = false; state = "stopping"; clearTimeout(maintenance);
+    if (stopped) return; stopped = true; ready = false; state = "stopping"; clearTimeout(maintenance); clearTimeout(startupDeadline);
     const force = setTimeout(() => process.exit(code || 1), 12_000); force.unref();
     await queue; await client.destroy();
     try { store.backup(); } catch { safeLog("backup_failed"); }
     server.stop(true); store.close(); clearTimeout(force); process.exit(code);
   }
   process.once("SIGTERM", () => { void shutdown(0); }); process.once("SIGINT", () => { void shutdown(0); });
-  process.on("unhandledRejection", () => { safeLog("unhandled_rejection"); void shutdown(1); });
-  client.on(Events.Error, () => safeLog("discord_connection_error"));
-  client.on(Events.ShardDisconnect, () => { ready = false; state = "reconnecting"; });
+  process.on("unhandledRejection", error => { logFailure("unhandled_rejection", error); void shutdown(1); });
+  client.on(Events.Error, error => logFailure("discord_connection_error", error));
+  client.on(Events.ShardDisconnect, event => { ready = false; state = "reconnecting"; safeLog("discord_disconnected", event.code); });
   client.on(Events.ShardResume, () => { if (state === "reconnecting") { ready = verified; state = verified ? "ready" : "checking"; } });
-  client.on(Events.ShardError, () => safeLog("discord_gateway_error"));
+  client.on(Events.ShardError, error => logFailure("discord_gateway_error", error));
   function maintain() {
     if (stopped) return;
     try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); }
@@ -675,13 +684,19 @@ export async function main(options: { createClient?: () => Client; environment?:
     finally { commandsSyncing = false; }
   }
   client.on(Events.ClientReady, () => {
+    safeLog("discord_gateway_ready");
     void serial(async () => {
-      ready = false; state = "checking";
+      ready = false; state = "checking_application"; safeLog("discord_application_checking");
       await client.application!.fetch();
+      validateIdentity(client.user?.id, client.application?.id, GUILD);
+      safeLog("discord_application_verified");
+      state = "checking_guild"; safeLog("discord_guild_checking");
       const guild = await client.guilds.fetch(GUILD); await assertBot(guild);
+      safeLog("discord_guild_verified");
       // Being online must not depend on optional storage, administrator warnings or command sync.
       try { store.backup(); } catch { safeLog("backup_failed"); }
       verified = true; ready = true; state = "ready"; lastHealthy = Date.now();
+      clearTimeout(startupDeadline);
       client.user!.setPresence({ activities: [{ name: "/hilfe · GoR Network", type: ActivityType.Watching }], status: "online" });
       safeLog("discord_ready");
       void registerCommands();
@@ -691,11 +706,18 @@ export async function main(options: { createClient?: () => Client; environment?:
   if (!token) {
     state = "token_missing";
     console.error(JSON.stringify({ at: new Date().toISOString(), event: "configuration_token_missing", hint: "Bot-Token als GOR_DISCORD_BOT_TOKEN, DISCORD_TOKEN, DISCORD_BOT_TOKEN, BOT_TOKEN oder TOKEN hinterlegen." }));
-    return;
+    await shutdown(1); return;
   }
+  console.log(JSON.stringify({ at: new Date().toISOString(), event: "configuration_token_found", source: token.key }));
+  startupDeadline = setTimeout(() => {
+    if (verified || stopped) return;
+    state = "startup_timeout"; logFailure("discord_startup_timeout", { code: "startup_timeout" }); void shutdown(1);
+  }, options.startupTimeoutMs ?? 120_000);
+  startupDeadline.unref();
   maintenance = setTimeout(maintain, 60_000); maintenance.unref();
   // Never log the token or a Discord HTTP request/response body.
   safeLog("discord_connecting");
+  state = "connecting";
   try { await client.login(token.value); } catch (error) { logFailure("discord_login_failed", error); await shutdown(1); }
 }
 
