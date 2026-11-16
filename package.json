@@ -1,5 +1,5 @@
 {
-  "name": "gor-network-bot", "version": "4.3.1", "private": true, "type": "module",
+  "name": "gor-network-bot", "version": "4.4.0", "private": true, "type": "module",
   "description": "GoR Network Discord Bot: Support, Projektaufnahme, Rollenwahl und Betrieb.",
   "packageManager": "bun@1.4.4",
   "scripts": { "start": "bun gor_network.ts", "test": "bun test", "typecheck": "tsc -p tsconfig.json", "check": "bun run typecheck && bun test", "smoke": "python3 scripts/smoke_test.py" },

@@ -15,6 +15,9 @@ import time
 def run_scenario(root, bun, port, scenario):
     with tempfile.TemporaryDirectory(prefix='gor-smoke-') as data:
         env = os.environ.copy()
+        for key in list(env):
+            if key.startswith('GOR_BACKUP_'):
+                env.pop(key, None)
         for key in ('GOR_DISCORD_BOT_TOKEN', 'DISCORD_TOKEN', 'DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'TOKEN',
                     'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_VOLUME_MOUNT_PATH', 'GOR_FIXTURE_ADMIN',
                     'GOR_FIXTURE_SYNC_ERROR', 'GOR_FIXTURE_WRONG_APP', 'GOR_FIXTURE_INVALID_TOKEN', 'GOR_FIXTURE_HANG', 'GOR_FIXTURE_FLOW',
@@ -40,7 +43,7 @@ def run_scenario(root, bun, port, scenario):
                 env['GOR_FIXTURE_HANG'] = 'true'
             if scenario.startswith('flow-'):
                 env['GOR_FIXTURE_FLOW'] = scenario.removeprefix('flow-')
-            if scenario == 'flow-project':
+            if scenario in ('flow-project','flow-privacy','flow-complaint'):
                 env['GOR_SUPPORT_ENABLED'] = 'true'
             if scenario in ('automatic-setup', 'setup-failure'):
                 env.update(GOR_AUTO_SETUP='true', GOR_FIXTURE_SETUP=scenario)
@@ -58,7 +61,7 @@ def run_scenario(root, bun, port, scenario):
                     raise AssertionError('Startup failure was not reported and stopped: ' + scenario)
                 if 'discord_ready' in logs:
                     raise AssertionError('A failed startup was reported as ready')
-                if scenario == 'connection-timeout' and '"confirmed":29' not in logs:
+                if scenario == 'connection-timeout' and '"confirmed":39' not in logs:
                     raise AssertionError('REST command registration incorrectly waited for Gateway READY')
                 if scenario in ('wrong-application', 'invalid-token') and 'commands_registered' in logs:
                     raise AssertionError('Commands were registered with an unverified identity')
@@ -86,7 +89,7 @@ def run_scenario(root, bun, port, scenario):
                     headers, body = response.split(b'\r\n\r\n', 1)
                     status = int(headers.split(b' ')[1])
                     setup_ready = scenario not in ('automatic-setup', 'setup-failure') or json.loads(body).get('setup') == ('ready' if scenario == 'automatic-setup' else 'attention')
-                    count = '0' if scenario == 'command-sync-failure' else '28' if scenario == 'command-partial-failure' else '29'
+                    count = '0' if scenario == 'command-sync-failure' else '38' if scenario == 'command-partial-failure' else '39'
                     commands_ready = json.loads(body).get('command_count') == count
                     if (status == wanted and setup_ready and commands_ready) or route != '/health' or time.monotonic() > deadline:
                         break
@@ -97,7 +100,7 @@ def run_scenario(root, bun, port, scenario):
                     health = json.loads(body)
                     if health['status'] != 'ready':
                         raise AssertionError('A connected fixture was not ready')
-                    if health.get('command_count') != count or health.get('command_total') != '29':
+                    if health.get('command_count') != count or health.get('command_total') != '39':
                         raise AssertionError('Command confirmation count was incorrect')
                     if health['commands'] != ('pending' if scenario in ('command-sync-failure', 'command-partial-failure') else 'registered'):
                         raise AssertionError('Failed command registration was reported as complete')
@@ -148,6 +151,7 @@ def main():
     scenarios = ['missing-token', 'invalid-token', 'connection-timeout', 'railway-no-volume', 'railway-admin',
                  'command-sync-failure', 'command-partial-failure', 'wrong-application']
     scenarios += ['flow-' + flow for flow in ('start', 'public-guide', 'private-guide', 'private-roles', 'own', 'team', 'phase', 'project', 'setup', 'setupstatus')]
+    scenarios += ['flow-' + flow for flow in ('legal','mydata','privacy','complaint','ideaform','ideas','events','finance','payment','legacy-payment','statusbutton','updatedenied','financedenied')]
     scenarios += ['automatic-setup', 'setup-failure']
     results = [run_scenario(root, args.bun, args.port, scenario) for scenario in scenarios]
     print(json.dumps({'smoke_test': 'passed', 'scenarios': results}))

@@ -1,12 +1,20 @@
-/** GoR Network bot, v4.3.1. Repository and container deployment (Bun).
+/** GoR Network bot, v4.4.0. Repository and container deployment (Bun).
  * Managed setup preserves unowned areas and member assignments; no message-content intent.
  * A persistent volume is required for case and publication management, not for connecting.
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, chmodSync, writeFileSync, renameSync, readdirSync, unlinkSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { storageLocation } from "./storage_path";
 import { CommandRegistrar, syncRestCommands } from "./command_registry";
+import { commands44 } from "./commands_v44";
+import { Update44 } from "./update44";
+import { PublicError } from "./feature_base";
+import { setProtection } from "./change_plan";
+import { publicUrl } from "./legal_config";
+import { cents } from "./feature_base";
+import { reviewAssignedAccess } from "./access_review";
+import type { CasePreset } from "./community_state";
 export { commandShape } from "./command_registry";
 import { reconcileServer, hydrateManagedMaps, adoptSetupResource, SETUP_ISSUES, issueCode, resourceKnown, type SetupReport, type SetupContext } from "./auto_setup";
 import { SetupJournal } from "./setup_journal";
@@ -22,7 +30,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.3.1";
+export const VERSION = "4.4.0";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -65,6 +73,8 @@ export const KINDS: Record<string, { title: string; roles: string[] }> = {
   beschwerde: { title: "Beschwerde", roles: ["networkleitung", "communityleitung", "moderation"] },
   zahlung: { title: "Zahlungsanliegen", roles: ["networkleitung", "finanzen"] },
   projekt: { title: "Projektaufnahme", roles: ["networkleitung", "communityleitung"] },
+  datenschutz: { title: "Datenschutzanfrage", roles: [] },
+  einspruch: { title: "Überprüfung / Einspruch", roles: ["networkleitung", "communityleitung"] },
 };
 export const SELF_ROLES: Record<string, string> = {
   "cw-spieler": "Clone Wars · Spieler", "ping-netzwerk": "Neuigkeiten zum Network",
@@ -72,9 +82,9 @@ export const SELF_ROLES: Record<string, string> = {
 };
 const ANNOUNCE_TARGETS = { neuigkeiten: "Network-Neuigkeiten", termine: "Community-Termine", "cw-neuigkeiten": "Clone Wars" };
 const MENTIONS = { parse: [] as [], repliedUser: false };
-const COLOR = 0x21cce2;
+const COLOR = 0xd9ab56;
 const now = () => Date.now() / 1000;
-export class UserError extends Error {
+export class UserError extends PublicError {
   constructor(message: string, public readonly code = "configuration_error") { super(message); }
 }
 export type RuntimeEnv = Record<string, string | undefined>;
@@ -96,7 +106,7 @@ export function runtimeSettings(env: RuntimeEnv) {
   const supportEnabled = storage !== "temporary" && !["false", "0", "off", "no"].includes((env.GOR_SUPPORT_ENABLED ?? "true").trim().toLowerCase());
   return { directory, storage, supportEnabled };
 }
-const TEMPORARY_ACTIONS = new Set(["start", "hilfe", "faq", "status", "einrichtung", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5",
+const TEMPORARY_ACTIONS = new Set(["start", "hilfe", "faq", "status", "rechtliches", "events", "finanzbericht", "einrichtung", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5", "gor44:legal", "gor44:status", "gor44:events", "gor44:finance", "gor44:payment",
   ...GUIDE_TOPICS.map(topic => "gor:guide:v5:" + topic)]);
 export function requireStorage(settings: ReturnType<typeof runtimeSettings>, action: string) {
   if (settings.storage === "temporary" && !TEMPORARY_ACTIONS.has(action))
@@ -183,8 +193,11 @@ export class Store {
       if (rows.length >= 3) throw new UserError("Bitte kläre zuerst einen deiner offenen Vorgänge.");
       const last = (this.db.query("SELECT MAX(created) AS last FROM cases WHERE guild_id=? AND opener_id=?").get(GUILD, openerId) as any).last;
       if (last !== null && timestamp - last < 60) throw new UserError("Bitte warte eine Minute vor einer weiteren Anfrage.");
-      const r = this.db.query("INSERT INTO cases(guild_id,opener_id,kind,status,created,updated) VALUES (?,?,?,'creating',?,?)").run(GUILD, openerId, kind, timestamp, timestamp);
-      return this.get(Number(r.lastInsertRowid));
+      const highest = (this.db.query("SELECT MAX(id) AS id FROM cases").get() as any).id || 0;
+      const id = Math.max(highest, Number(this.setting("case_id_highwater") || 0)) + 1;
+      if (!Number.isSafeInteger(id)) throw new UserError("Die Fallnummern müssen vor der Fortsetzung geprüft werden.");
+      this.db.query("INSERT INTO cases(id,guild_id,opener_id,kind,status,created,updated) VALUES (?,?,?,?,'creating',?,?)").run(id,GUILD,openerId,kind,timestamp,timestamp);
+      this.setting("case_id_highwater",String(id)); return this.get(id);
     }).immediate();
   }
   get(id: number): Case {
@@ -258,7 +271,7 @@ export class Store {
     this.db.query("UPDATE operations SET state='expired',payload='{}' WHERE state='draft' AND expires<?").run(now());
     this.db.query("UPDATE operations SET payload='{}' WHERE state IN ('confirmed','cancelled','expired') AND created<?").run(now() - 86400);
     this.db.query("DELETE FROM interactions WHERE created<?").run(now() - 86400 * 7);
-    this.db.query("DELETE FROM audit WHERE at<?").run(now() - 86400 * 180);
+    this.db.query("DELETE FROM audit WHERE at<?").run(now() - 86400 * 90);
   }
   backup(manual = false) {
     const timestamp = now();
@@ -270,8 +283,9 @@ export class Store {
     try {
       writeFileSync(temp, this.db.serialize(), { mode: 0o600, flag: "wx" }); renameSync(temp, join(dir, name));
       const files = readdirSync(dir).filter(f => /^gor-(auto|manual)-.*\.sqlite$/.test(f)).sort().reverse();
+      for(const file of files)if(statSync(join(dir,file)).mtimeMs<Date.now()-30*86400_000)unlinkSync(join(dir,file));
       for (const prefix of ["gor-auto-", "gor-manual-"])
-        for (const file of files.filter(f => f.startsWith(prefix)).slice(7)) unlinkSync(join(dir, file));
+        for (const file of readdirSync(dir).filter(f => /^gor-(auto|manual)-.*\.sqlite$/.test(f)).sort().reverse().filter(f => f.startsWith(prefix)).slice(7)) unlinkSync(join(dir, file));
       this.lastBackup = timestamp; this.backupHealthy = true;
       if (manual) this.setting("manual_backup_at", String(timestamp));
       return name;
@@ -296,12 +310,22 @@ export function commandDefinitions() {
     command("rollen", "Deine Spiel- und Benachrichtigungsrollen selbst auswählen."),
     command("unterstuetzen", "Informationen zur freiwilligen Unterstützung von GoR."),
     command("meine_faelle", "Deine eigenen Anliegen und ihren Bearbeitungsstand anzeigen."),
-    command("team", "Dein Teamboard mit Zuständigkeiten und offenen Anliegen."),
+    command("team", "Dein Teamboard mit Zuständigkeiten und offenen Anliegen.")
+      .addIntegerOption(o=>o.setName("fall").setDescription("Für den Inhaber: konkret zu prüfender Aufbewahrungsfall").setMinValue(1))
+      .addIntegerOption(o=>o.setName("aufbewahrung").setDescription("Inhaber: Aufbewahrung für 0 bis 365 Tage; 0 beendet die Ausnahme").setMinValue(0).setMaxValue(365))
+      .addStringOption(o=>o.setName("grund").setDescription("Begründung der Aufbewahrungsausnahme").addChoices(
+        {name:"Laufende Prüfung",value:"laufende_pruefung"},{name:"Rechtliche Sicherung",value:"rechtliche_sicherung"},{name:"Gesetzliche Aufbewahrung",value:"gesetzliche_aufbewahrung"})),
     command("faelle", "Deine zuständigen offenen Supportfälle anzeigen.")
       .addIntegerOption(o => o.setName("seite").setDescription("Seite der Fallübersicht").setMinValue(1)),
     caseNumber(command("projektstatus", "Leitung: die Aufnahmephase eines Serverprojekts fortschreiben."))
       .addStringOption(o => o.setName("phase").setDescription("Nächster Schritt in der Projektaufnahme").setRequired(true)
-        .addChoices(...Object.entries(PROJECT_PHASES).filter(([value]) => value !== "neu").map(([value, name]) => ({ name, value })))),
+        .addChoices(...Object.entries(PROJECT_PHASES).filter(([value]) => value !== "neu").map(([value, name]) => ({ name, value }))))
+      .addUserOption(o=>o.setName("ansprechpartner").setDescription("Bestätigter Ansprechpartner des Piloten"))
+      .addNumberOption(o=>o.setName("pilotbudget").setDescription("Freigegebene Budgetgrenze in Euro; 0 ist möglich").setMinValue(0).setMaxValue(1_000_000))
+      .addStringOption(o=>o.setName("vereinbarung").setDescription("HTTPS-Verweis zur tatsächlich bestätigten Projektvereinbarung").setMaxLength(500))
+      .addBooleanOption(o=>o.setName("absprachen_geprueft").setDescription("Betreiber, Budget, Rechte, Datenwege und Ausstieg wurden geklärt"))
+      .addIntegerOption(o=>o.setName("pilottage").setDescription("7 bis 90 Tage; Standard 30").setMinValue(7).setMaxValue(90))
+      .addBooleanOption(o=>o.setName("pilot_ausgewertet").setDescription("Leitung: Betreuung, Kosten und Spielerrückmeldung wurden ausgewertet")),
     caseNumber(command("uebernehmen", "Einen zuständigen Fall als unbeteiligter Bearbeiter übernehmen.")),
     caseNumber(command("schliessen", "Einen eigenen oder zugewiesenen Fall abschließen.")),
     caseNumber(command("fall_zuordnen", "Inhaber: bestehenden Kanal nach einer unklaren Aktion bestätigen."))
@@ -311,7 +335,11 @@ export function commandDefinitions() {
     command("einrichtung", "Leitung: Stand der automatischen GoR-Einrichtung anzeigen."),
     command("einrichten", "Inhaber: GoR-Einrichtung jetzt automatisch abgleichen."),
     command("einrichtung_automatik", "Inhaber: automatische GoR-Pflege aktivieren oder pausieren.")
-      .addBooleanOption(o => o.setName("aktiv").setDescription("Automatische Pflege einschalten").setRequired(true)),
+      .addBooleanOption(o => o.setName("aktiv").setDescription("Automatische Pflege einschalten").setRequired(true))
+      .addStringOption(o => o.setName("schutz").setDescription("Gestaltungsfeld schützen, z. B. channel:lounge:topic").setMaxLength(100))
+      .addIntegerOption(o => o.setName("stunden").setDescription("0 hebt Schutz auf; sonst 1 bis 168 Stunden").setMinValue(0).setMaxValue(168))
+      .addUserOption(o => o.setName("datenschutz_person").setDescription("Benannte Person für private Datenschutzanfragen"))
+      .addBooleanOption(o => o.setName("kontakt_entfernen").setDescription("Die benannte Person aus der Datenschutzzuständigkeit entfernen")),
     command("einrichtung_zuordnen", "Inhaber: einen vorhandenen Eintrag nach unklarer Anlage zuordnen.")
       .addStringOption(o => o.setName("schluessel").setDescription("Fester Schlüssel aus /einrichtung, z. B. role:support").setRequired(true))
       .addStringOption(o => o.setName("id").setDescription("Discord-ID des bereits vorhandenen Eintrags").setRequired(true)),
@@ -333,6 +361,7 @@ export function commandDefinitions() {
       .addStringOption(o => o.setName("vorgang").setDescription("Vorgangs-ID").setRequired(true))
       .addStringOption(o => o.setName("nachricht").setDescription("Nachrichten-ID im ursprünglichen Zielkanal").setRequired(true)),
     command("backup", "Inhaber: eine lokale Sicherung der Bot-Datenbank erstellen."),
+    ...commands44(),
   ].map(c => c.toJSON());
 }
 
@@ -359,7 +388,7 @@ export function sameAnnouncement(op: Operation, message: { author: { id: string 
     !(got.fields?.length);
 }
 async function answer(i: RepliableInteraction, content: string, extra: Record<string, any> = {}) {
-  const options = { content, embeds: [], components: [], allowedMentions: MENTIONS, ...extra };
+  const options = { content, embeds: [], components: [], attachments: [], allowedMentions: MENTIONS, ...extra };
   if (i.deferred || i.replied) await i.editReply(options);
   else await i.reply({ ...options, flags: MessageFlags.Ephemeral });
 }
@@ -461,6 +490,12 @@ export async function main(options: { createClient?: () => Client; environment?:
   const serial = <T,>(fn: () => Promise<T>) => {
     const task = queue.then(fn); queue = task.catch(() => {}); return task;
   };
+  const features = new Update44({ store, env, guild:GUILD,application:APPLICATION,version:VERSION,maps:setupMaps, answer,
+    createCase:(i,member,kind,preset)=>serial(()=>createCase(i,member,kind,preset)),caseChannel,serial,applySetup:before=>runSetup(true,before),
+    reviewAccess:()=>serial(async()=>reviewAssignedAccess(await client.guilds.fetch(GUILD),store,APPLICATION,canHandle,caseChannel)),
+    status:()=>({connected:ready && client.isReady(),commands:commands.ready,commandCount:commands.confirmed,commandTotal:commandDefinitions().length,
+      setup:setupState,storage:settings.storage}) });
+  safeLog("community44_storage_ready");
   async function shutdown(code: number) {
     if (stopped) return; stopped = true; ready = false; state = "stopping"; clearTimeout(maintenance); clearTimeout(startupDeadline);
     const force = setTimeout(() => process.exit(code || 1), 12_000); force.unref();
@@ -477,6 +512,7 @@ export async function main(options: { createClient?: () => Client; environment?:
   function maintain() {
     if (stopped) return;
     try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); }
+    void features.maintenance().catch(()=>safeLog("community44_maintenance_attention"));
     void registerCommands();
     if (client.isReady()) {
       lastHealthy = Date.now();
@@ -502,16 +538,17 @@ export async function main(options: { createClient?: () => Client; environment?:
     return me;
   }
   function canHandle(c: Case, member: GuildMember) {
-    return eligible(c.kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId);
+    return features.canHandle(c,member,eligible(c.kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId));
   }
   function requireTeam(member: GuildMember) {
-    if (!Object.keys(KINDS).some(kind => eligible(kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId)))
+    if (!features.isPrivacyContact(member.id) && !Object.keys(KINDS).some(kind => eligible(kind, member.id, [...member.roles.cache.keys()], member.guild.ownerId)))
       throw new UserError("Für deine Rolle ist keine Fallzuständigkeit hinterlegt. Deine eigenen Anfragen findest du unter /meine_faelle.");
   }
   function caseLine(c: Case) {
     const label = ({ open: "Offen", closed: "Abgeschlossen", creating: "Wird vorbereitet", assigning: "In Zuordnung", closing: "Wird abgeschlossen", needs_review: "Wird geprüft" } as Record<string, string>)[c.status] || "Wird geprüft";
     const phase = c.kind === "projekt" ? ` · ${PROJECT_PHASES[store.projectPhase(c.id)]}` : "";
-    return `**#${c.id} · ${KINDS[c.kind]?.title || "Anliegen"}**\n${label}${phase} · seit <t:${Math.floor(c.created)}:R>\n${c.channel_id ? `<#${c.channel_id}>` : "Die Betreuung bereitet den Kontakt vor"} · ${c.assignee_id ? `Betreuung: <@${c.assignee_id}>` : "Noch nicht übernommen"}`;
+    const policy=features.state.policy(c.id);
+    return `**#${c.id} · ${KINDS[c.kind]?.title || "Anliegen"}**\n${label}${phase} · seit <t:${Math.floor(c.created)}:R>\n${c.channel_id ? `<#${c.channel_id}>` : "Die Betreuung bereitet den Kontakt vor"} · ${c.assignee_id ? `Betreuung: <@${c.assignee_id}>` : "Noch nicht übernommen"}${policy?.due?`\nAnfrage-Prüftermin: <t:${Math.floor(policy.due)}:f>`:""}`;
   }
   async function ownCases(i: RepliableInteraction, member: GuildMember) {
     const rows = store.memberCases(member.id);
@@ -567,9 +604,10 @@ export async function main(options: { createClient?: () => Client; environment?:
       new ButtonBuilder().setCustomId("gor:audit:v5").setLabel("Stand aktualisieren").setStyle(ButtonStyle.Primary),
     ).toJSON()] });
   }
-  async function createCase(i: any, member: GuildMember, kind: string) {
+  async function createCase(i: any, member: GuildMember, kind: string, preset?:CasePreset) {
     if (!settings.supportEnabled) throw new UserError("Der private Support ist noch nicht aktiviert. Bitte kontaktiere die Networkleitung.");
     if (!Object.hasOwn(KINDS, kind)) throw new UserError("Bitte wähle eine gültige Anliegenart.");
+    if(kind==="zahlung") { await features.payment(i); return; }
     const application = kind === "projekt" && i.customId === "gor:project:v5";
     const get = (key: string) => escapeMarkdown(i.fields.getTextInputValue(key).trim());
     const details = application ? [
@@ -579,7 +617,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     ] : [];
     if (details.some(field => !field.value)) throw new UserError("Bitte fülle die Pflichtfelder deiner Projektanfrage aus.");
     const description = application ? "Deine Projektanfrage ist eingegangen. Der aktuelle Schritt ist **Neu eingegangen**. Den weiteren Stand findest du unter /meine_faelle."
-      : `**${get("summary")}**\n\n${get("details")}`;
+      : preset ? `**${escapeMarkdown(preset.summary)}**\n\n${escapeMarkdown(preset.details)}` : `**${get("summary")}**\n\n${get("details")}`;
     const guild = member.guild, me = await assertBot(guild);
     const category = await guild.channels.fetch(CATEGORIES.hilfe, { force: true });
     const needed = [P.ManageChannels, P.ManageRoles, P.ViewChannel, P.SendMessages, P.ReadMessageHistory];
@@ -592,6 +630,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       catch { throw new UserError("Es gibt ältere Fallkanäle ohne passende Datenbankzuordnung. Die Leitung muss zuerst die vorhandene Sicherung prüfen."); }
     }
     const c = store.reserve(member.id, kind);
+    features.state.open(c,preset);
     try {
       const ch = await guild.channels.create({ name: `${kind === "projekt" ? "projekt" : "fall"}-${String(c.id).padStart(4, "0")}`, type: ChannelType.GuildText,
         parent: CATEGORIES.hilfe, topic: `gor-case:${c.id}`, reason: "GoR privater Supportfall",
@@ -603,7 +642,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       const saved = store.change(c.id, { channel_id: ch.id, status: "open" });
       const verified = await caseChannel(guild, saved);
       await verified.send({ embeds: [embed(`${KINDS[kind].title} · Fall ${c.id}`,
-        `${description}\n\nDu und zugewiesene Bearbeiter sehen diesen Fall. Inhaber und Administratoren können technisch ebenfalls zugreifen. Bitte keine Passwörter oder Tokens senden. Eine Betreuung rund um die Uhr wird nicht versprochen.`).addFields(details)], allowedMentions: MENTIONS,
+        `${description}\n\nDu und zugewiesene Bearbeiter sehen diesen Fall. Inhaber und Administratoren können technisch ebenfalls zugreifen. Bitte keine Passwörter, Zahlungs-, Ausweis- oder Gesundheitsunterlagen senden. Hinweise zur Verarbeitung: /rechtliches.\nNach Abschluss wird die Aufbewahrung geprüft; ein Abschluss löscht keine Daten. Eine Betreuung rund um die Uhr wird nicht versprochen.`).addFields(details)], allowedMentions: MENTIONS,
         components: [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId("gor:own:v5").setLabel("Meine Anliegen ansehen").setStyle(ButtonStyle.Secondary))] });
       store.audit(member.id, "case_create", String(c.id));
       await answer(i, `Dein privater Fall ist angelegt: <#${verified.id}>. Eine zuständige Person kann ihn übernehmen.`);
@@ -641,17 +680,20 @@ export async function main(options: { createClient?: () => Client; environment?:
     if (!i.isRepliable()) return;
     if (i.guildId !== GUILD) { await answer(i, "Dieser Bot gehört zum GoR Network."); return; }
     if (!store.consume(i.id)) return;
+    if(i.isButton() && i.customId==="gor44:status") { await i.deferReply({flags:MessageFlags.Ephemeral});await features.status(i);return; }
     // Responding with a modal must be the initial interaction response.
     if (!ready || !client.isReady()) throw new UserError("Der Bot stellt die Verbindung gerade wieder her.");
     if (i.member?.pending) throw new UserError("Bitte bestätige zuerst die Serverregeln.");
     const action = i.isChatInputCommand() ? i.commandName : "customId" in i ? i.customId : "unknown";
     requireStorage(settings, action);
+    if(!settings.supportEnabled && ["datenanfrage","beschwerde","einspruch"].includes(action)) {await i.deferReply({flags:MessageFlags.Ephemeral});await features.legal(i);return;}
+    const nextModal=features.modalFor(i);if(nextModal && "showModal" in i){await i.showModal(nextModal);return;}
     if (!settings.supportEnabled && ["support", "projektanfrage", "gor:support:v3", "gor:projekt:v3", "gor:kind:v4"].includes(action))
       throw new UserError("Der private Support ist noch nicht aktiviert. Bitte kontaktiere die Networkleitung.");
     if ((i.isButton() && i.customId === "gor:projekt:v3") || (i.isChatInputCommand() && i.commandName === "projektanfrage")) {
       await i.showModal(caseModal("projekt")); return;
     }
-    if (i.isStringSelectMenu() && i.customId === "gor:kind:v4") {
+    if (i.isStringSelectMenu() && i.customId === "gor:kind:v4" && i.values[0]!=="zahlung") {
       await i.showModal(caseModal(i.values[0])); return;
     }
     // Public panels open a personal card; navigation inside an ephemeral card updates it in place.
@@ -659,6 +701,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     else await i.deferReply({ flags: MessageFlags.Ephemeral });
     const member = await memberFor(i), guild = member.guild;
     await assertBot(guild);
+    if(await features.handle(i,member))return;
     if (i.isButton() && i.customId.startsWith("gor:guide:v5:")) {
       const topic = i.customId.slice("gor:guide:v5:".length);
       if (!(GUIDE_TOPICS as readonly string[]).includes(topic)) throw new UserError("Bitte öffne deinen Einstieg erneut mit /start.");
@@ -673,7 +716,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     if ((i.isButton() && i.customId === "gor:support:v3") || (i.isChatInputCommand() && i.commandName === "support")) {
       const select = new StringSelectMenuBuilder().setCustomId("gor:kind:v4").setPlaceholder("Wähle dein Anliegen")
         .addOptions(Object.entries(KINDS).map(([value, { title: label }]) => ({ label, value })));
-      await answer(i, "Wähle eine Fallart. Allgemeine Fragen passen auch in den Fragenkanal. Persönliche Zahlungsdetails bleiben im privaten Kontakt.",
+      await answer(i, "Wähle eine Fallart. Allgemeine Fragen passen in den Fragenkanal. Notwendige Angaben landen in deinem privaten Fall; Betreuer erhalten nur zugewiesenen Zugriff. Hinweise: /rechtliches. Zahlungsunterlagen ausschließlich über den externen Zahlungs-Kontakt senden.",
         { components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)] }); return;
     }
     if (i.isModalSubmit() && i.customId === "gor:project:v5") { await serial(() => createCase(i, member, "projekt")); return; }
@@ -703,14 +746,14 @@ export async function main(options: { createClient?: () => Client; environment?:
       case "start":
       case "hilfe": await answer(i, "", guideView("start", CHANNELS)); break;
       case "faq": await answer(i, "", faqView(i.options.getString("thema") || undefined, CHANNELS)); break;
-      case "status": await answer(i, `**GoR Bot v${VERSION}**\nDiscord verbunden · Datenbank erreichbar\nBefehlsregistrierung: ${commands.ready ? `${commands.confirmed} bestätigt` : "wird erneut versucht"}\nAutomatische Einrichtung: ${setupState}\nDatenhaltung: ${settings.storage === "temporary" ? "vorläufig – dauerhaftes Volume fehlt" : "dauerhaftes Datenverzeichnis"}\nPrivater Support: ${settings.supportEnabled ? "aktiv" : "pausiert"}\nSicherungen: ${settings.storage === "temporary" ? "dauerhafte Sicherung noch nicht eingerichtet" : store.backupHealthy ? "letzter lokaler Lauf erfolgreich" : "Leitung muss den Sicherungslauf prüfen"}`); break;
+      case "status": await features.status(i); break;
       case "unterstuetzen": await answer(i, "", guideView("unterstuetzen", CHANNELS)); break;
       case "rollen": await rolesView(i, member); break;
       case "meine_faelle": await ownCases(i, member); break;
       case "faelle": await caseBoard(i, member, i.options.getInteger("seite") || 1); break;
       case "team": {
         requireTeam(member); const rows = store.queue().filter(c => canHandle(c, member));
-        const areas = Object.entries(KINDS).filter(([key]) => eligible(key, member.id, [...member.roles.cache.keys()], guild.ownerId));
+        const areas = Object.entries(KINDS).filter(([key]) => eligible(key, member.id, [...member.roles.cache.keys()], guild.ownerId) || (key==="datenschutz" && features.isPrivacyContact(member.id)));
         const summary = areas.map(([key, info]) => `**${info.title}:** ${rows.filter(c => c.kind === key).length}`).join("\n");
         await answer(i, "", { embeds: [embed("GoR · Dein Teamboard", "Deine Zuständigkeiten und die nächsten Aufgaben an einem Ort.")
           .addFields(
@@ -726,8 +769,17 @@ export async function main(options: { createClient?: () => Client; environment?:
       }
       case "projektstatus": await serial(async () => {
         leadership(member);
-        const id = i.options.getInteger("fall", true), phase = store.setProjectPhase(id, i.options.getString("phase", true), member.id);
-        await answer(i, `**Projektanfrage #${id}: ${PROJECT_PHASES[phase]}**\nDer Stand ist für den Anfragenden unter /meine_faelle sichtbar. Absprachen, Einrichtung und Freigaben werden mit den Beteiligten geklärt; dieser Befehl verändert keine Server- oder Besitzrechte.`);
+        const id = i.options.getInteger("fall", true), next=i.options.getString("phase",true), current=store.projectPhase(id);
+        if(!canAdvanceProject(current,next))throw new UserError("Dieser Projektphasenwechsel ist nicht vorgesehen.");
+        if(next==="pilot") {
+          const contact=i.options.getUser("ansprechpartner"),budget=i.options.getNumber("pilotbudget"),agreement=i.options.getString("vereinbarung");
+          if(!contact || budget===null || !agreement || !i.options.getBoolean("absprachen_geprueft"))throw new UserError("Vor dem Piloten bitte Ansprechpartner, Budget, Projektvereinbarung und die geprüften Absprachen angeben.");
+          await guild.members.fetch({user:contact.id,force:true});
+          features.state.projectCheck(id,contact.id,cents(budget),publicUrl(agreement),member.id,i.options.getInteger("pilottage")||30);
+        }
+        if(next==="aufgenommen" && (!features.state.projectReady(id) || !i.options.getBoolean("pilot_ausgewertet")))throw new UserError("Vor der Aufnahme müssen Pilotvereinbarung und ausdrücklich bestätigte Auswertung vorliegen.");
+        const phase=store.setProjectPhase(id,next,member.id),pilot=features.state.projectReady(id);
+        await answer(i, `**Projektanfrage #${id}: ${PROJECT_PHASES[phase]}**\nDer Stand ist für den Anfragenden unter /meine_faelle sichtbar.${phase==="pilot" && pilot?`\nPilot-Auswertung vorgesehen: <t:${Math.floor(pilot.pilot_end)}:d>`:""}\nDieser Schritt überträgt keine Server, Konten, Verträge oder Nutzungsrechte.`);
       }); break;
       case "uebernehmen": await serial(async () => {
         const c = store.get(i.options.getInteger("fall", true));
@@ -746,6 +798,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       case "schliessen": await serial(async () => {
         const c = store.get(i.options.getInteger("fall", true));
         if (!mayClose(c, member.id, guild.ownerId)) throw new UserError("Nur Anfragender, zugewiesener Bearbeiter oder Inhaber können den Fall abschließen.");
+        if(["datenschutz","beschwerde","einspruch"].includes(c.kind) && c.opener_id!==member.id && !canHandle(c,member))throw new UserError("Ein beteiligter oder nicht zuständiger Bearbeiter darf diesen Fall nicht entscheiden.");
         if (c.status !== "open") throw new UserError("Dieser Fall ist nicht offen oder muss geprüft werden.");
         const ch = await caseChannel(guild, c); store.change(c.id, { status: "closing" });
         try {
@@ -755,9 +808,9 @@ export async function main(options: { createClient?: () => Client; environment?:
           for (const id of [c.opener_id, c.assignee_id].filter(Boolean) as string[])
             if (!confirmed.permissionOverwrites.cache.get(id)?.deny.has(P.SendMessages)) throw new UserError("Der Schreibschutz ist noch nicht bestätigt.");
           await ch.send({ content: "**Abgeschlossen.** Der Verlauf bleibt für die bisherigen Beteiligten lesbar. Die Leitung prüft die weitere Aufbewahrung.", allowedMentions: MENTIONS });
-          store.change(c.id, { status: "closed" }); store.audit(member.id, "case_close", String(c.id));
+          store.change(c.id, { status: "closed" }); features.state.close(c.id); store.audit(member.id, "case_close", String(c.id));
         } catch (e) { store.change(c.id, { status: "needs_review" }); throw e; }
-        await answer(i, "Der Fall ist abgeschlossen und für die Beteiligten schreibgeschützt.");
+        await answer(i, "Der Fall ist abgeschlossen und für die Beteiligten schreibgeschützt. Die Aufbewahrung wird getrennt geprüft; dies bestätigt keine bereits ausgeführte Löschung oder vollständige Datenschutzauskunft.");
       }); break;
       case "fall_zuordnen": await serial(async () => {
         own(member); const c = store.get(i.options.getInteger("fall", true));
@@ -766,7 +819,7 @@ export async function main(options: { createClient?: () => Client; environment?:
         try {
           for (const id of new Set([c.opener_id, c.assignee_id].filter(Boolean) as string[]))
             await ch.permissionOverwrites.edit(id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }, { type: OverwriteType.Member, reason: "GoR bestätigte Wiederaufnahme" });
-          const saved = store.change(c.id, { channel_id: ch.id, status: "open" }); await caseChannel(guild, saved);
+          const saved = store.change(c.id, { channel_id: ch.id, status: "open" }); await caseChannel(guild, saved);features.state.reopen(c.id);
         } catch (e) { store.change(c.id, { status: "needs_review" }); throw e; }
         store.audit(member.id, "case_recover", String(c.id)); await answer(i, `Bestehenden Kanal bestätigt: <#${ch.id}>.`);
       }); break;
@@ -823,7 +876,8 @@ export async function main(options: { createClient?: () => Client; environment?:
         if (setupReport) view.addFields({ name: "Letzter Lauf", value: `<t:${Math.floor(setupReport.at / 1000)}:R>\n${setupReport.created} angelegt · ${setupReport.updated} aktualisiert · ${setupReport.unchanged} bereits passend` });
         if (issues.length) view.addFields({ name: `${issues.length} Punkte prüfen`, value: issues.slice(0, 6).map(item => `**${item.key}**\n${SETUP_ISSUES[item.code] || SETUP_ISSUES.unexpected_error}`).join("\n\n") });
         if (pending.length) view.addFields({ name: "Unklare Anlagen", value: pending.slice(0, 8).map(item => `\`${item.key}\``).join("\n") + "\nInhaber: vorhandenen Eintrag mit /einrichtung_zuordnen bestätigen." });
-        await answer(i, "", { embeds: [view.toJSON()] }); break;
+        view.addFields({name:"Update 4.4 · Kontakt, Datenschutz & Betrieb",value:features.readiness()});
+        await answer(i, "", { embeds: [view.toJSON()],components:member.id===guild.ownerId?features.settingsButtons():[] }); break;
       }
       case "einrichten": {
         own(member); if (setupRunning) { await answer(i, "Die Einrichtung läuft bereits. /einrichtung zeigt den Stand."); break; }
@@ -831,6 +885,12 @@ export async function main(options: { createClient?: () => Client; environment?:
       }
       case "einrichtung_automatik": {
         own(member); const active = i.options.getBoolean("aktiv", true);
+        const protectedKey=i.options.getString("schutz");if(protectedKey)setProtection(store,protectedKey,i.options.getInteger("stunden")??24);
+        const person=i.options.getUser("datenschutz_person");
+        if(person){await guild.members.fetch({user:person.id,force:true});let list:string[]=[];try{list=JSON.parse(store.setting("privacy_contacts_json_v44")||"[]");}catch{}
+          list=i.options.getBoolean("kontakt_entfernen")?list.filter(id=>id!==person.id):[...new Set([...list,person.id])];
+          if(list.length>4)throw new UserError("Bitte höchstens vier konkret benannte Datenschutzkontakte verwenden.");
+          store.setting("privacy_contacts_json_v44",JSON.stringify(list));store.setting("privacy_contacts_v44",list.join(","));}
         store.setting("auto_setup_paused", active ? "false" : "true"); store.audit(member.id, "auto_setup_mode", active ? "enabled" : "paused");
         if (active) { lastSetupAttempt = 0; void runSetup(); }
         else setupState = setupRunning ? "pausing" : "paused";
@@ -855,7 +915,7 @@ export async function main(options: { createClient?: () => Client; environment?:
         if (!/^\d{15,22}$/.test(id)) throw new UserError("Bitte die konkrete Nachrichten-ID verwenden.");
         const ch = await textChannel(guild, CHANNELS.support), m = await ch.messages.fetch(id);
         const ids = m.components.flatMap(row => "components" in row ? row.components.map((c: any) => c.customId) : []).sort();
-        if (m.author.id !== APPLICATION || JSON.stringify(ids) !== JSON.stringify(["gor:projekt:v3", "gor:support:v3"])) throw new UserError("Das ist kein passendes GoR Supportbedienfeld.");
+        if (m.author.id !== APPLICATION || (!sameCommunityPanel(m,supportView(),APPLICATION) && JSON.stringify(ids) !== JSON.stringify(["gor:projekt:v3", "gor:support:v3"]))) throw new UserError("Das ist kein passendes GoR Supportbedienfeld.");
         store.setting("panel_message_id", id); store.audit(member.id, "panel_recover", id); await answer(i, "Das vorhandene Supportbedienfeld ist bestätigt.");
       }); break;
       case "serverpruefen": await serverReport(i, member); break;
@@ -885,7 +945,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     void handle(i).catch(async e => {
       safeLog("interaction_failed", typeof e?.code === "number" ? e.code : undefined);
       if (i.isRepliable()) try {
-        await answer(i, e instanceof UserError ? e.message : "Der Vorgang konnte nicht bestätigt werden. Bitte die Networkleitung informieren. Unklare Änderungen werden nicht auf Verdacht wiederholt.");
+        await answer(i, e instanceof PublicError ? e.message : "Der Vorgang konnte nicht bestätigt werden. Bitte die Networkleitung informieren. Unklare Änderungen werden nicht auf Verdacht wiederholt.");
       } catch { safeLog("interaction_response_failed"); }
     }).finally(() => { try { store.backup(); store.cleanup(); } catch { safeLog("maintenance_failed"); } });
   });
@@ -899,7 +959,7 @@ export async function main(options: { createClient?: () => Client; environment?:
         phase: commands.phase, confirmed: commands.confirmed, total: commandDefinitions().length, ...errorDiagnostic(error) }));
     }
   }
-  async function runSetup(force = false) {
+  async function runSetup(force = false,before?:()=>Promise<void>):Promise<SetupReport|undefined> {
     if (stopped || !verified || !client.isReady() || setupRunning) return;
     if (settings.storage === "temporary") { setupState = "storage_required"; return; }
     if (!force && (!setupEnabled || store.setting("auto_setup_paused") === "true")) { setupState = "paused"; return; }
@@ -907,14 +967,16 @@ export async function main(options: { createClient?: () => Client; environment?:
     if (!force && Date.now() - lastSetupAttempt < delay) return;
     setupRunning = true; setupState = "running"; lastSetupAttempt = Date.now(); safeLog("auto_setup_started");
     try {
-      setupReport = await serial(async () => (options.setupRunner || reconcileServer)({
+      setupReport = await serial(async () => {await before?.();return (options.setupRunner || reconcileServer)({
         guild: await client.guilds.fetch(GUILD), application: APPLICATION, target: GUILD, maps: setupMaps, storage: store,
+        legal:features.publicLinks(),
         stopped: () => stopped || (!force && store.setting("auto_setup_paused") === "true"),
-      }));
+      });});
       setupState = !force && store.setting("auto_setup_paused") === "true" ? "paused" : setupReport.status;
       store.setting("auto_setup_report", JSON.stringify(setupReport));
       console.log(JSON.stringify({ at: new Date().toISOString(), event: "auto_setup_finished", created: setupReport.created, updated: setupReport.updated, issues: setupReport.issues.length }));
-    } catch (error) { setupState = "attention"; console.error(JSON.stringify({ at: new Date().toISOString(), event: "auto_setup_failed", code: issueCode(error) })); }
+      return setupReport;
+    } catch (error) { setupState = "attention"; console.error(JSON.stringify({ at: new Date().toISOString(), event: "auto_setup_failed", code: issueCode(error) })); if(before)throw error; }
     finally { setupRunning = false; }
   }
   client.on(Events.ClientReady, () => {
@@ -933,6 +995,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       clearTimeout(startupDeadline);
       client.user!.setPresence({ activities: [{ name: "/hilfe · GoR Network", type: ActivityType.Watching }], status: "online" });
       safeLog("discord_ready");
+      void features.maintenance().catch(()=>safeLog("community44_maintenance_attention"));
       void registerCommands();
       void runSetup();
     }).catch(error => { logFailure("startup_check_failed", error); void shutdown(1); });

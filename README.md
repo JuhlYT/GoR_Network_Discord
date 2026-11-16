@@ -2,6 +2,18 @@
 
 Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverprojekte. GoR verbindet verschiedene Spiele und Communities unter einem Network.
 
+## Version 4.4.0: Community, Datenschutz und kontrollierte Updates
+
+39 Befehle, ein überarbeitetes Menü in Gold, native Veranstaltungsplanung, öffentliche Ideen mit nachvollziehbarem Stand und einzeln freigegebene Finanzberichte. Datenschutzanfragen und Beschwerden haben gesonderte Zuständigkeiten. Zahlungsunterlagen werden nicht mehr in neuen Discord-Fällen erfasst.
+
+Mit `/einrichtung` richtet der Inhaber die tatsächlichen öffentlichen Kontakt- und Informationswege ein. Es werden keine Betreiberangaben erfunden und keine offenen Rechtsvorlagen automatisch veröffentlicht. Eigene Metadaten sind mit `/meine_daten` erreichbar; `/datenanfrage` eröffnet den begrenzten Bearbeitungsweg. Externe Kontakte bleiben auch für Menschen ohne Serverzugang erforderlich.
+
+`/update_vorschau` bindet die konkrete Vorschau an den frisch gelesenen Server- und Konfigurationsstand. Geschützte Gestaltungsfelder werden zeitlich befristet erhalten; Sicherheitsrechte bleiben prüfbar. Alte Fallkanäle erhalten keinen rückwirkenden automatischen Löschtermin. Fällige Kanäle werden einzeln nach Vorschau bestätigt. Ein getrenntes Löschjournal wird bei Rücksicherungen erneut angewandt.
+
+Unabhängige AES-256-GCM-Sicherungen können mit einem tatsächlich eingerichteten und freigegebenen S3-Ziel aktiviert werden; sie werden erst nach Zurücklesen als bestätigt ausgegeben. Ohne dieses Ziel bleibt der Punkt sichtbar offen. Ein zusätzlicher Projektpilot braucht bestätigte Betreiber-, Budget-, Rechte-, Daten- und Ausstiegsabsprachen.
+
+**Start und konkrete Befehle:** [docs/UPDATE_4_4.md](docs/UPDATE_4_4.md). **Rechtsentwürfe:** [docs/rechtliches](docs/rechtliches). Die tatsächliche Discord-Abnahme, Betreiberangaben und Dienstleisterkonfiguration bleiben getrennt vom erfolgreichen Softwaretest.
+
 ## Fehlende Slash-Befehle: Reparatur in Version 4.3.1
 
 Die 29 Befehle werden direkt über Discords REST-API auf dem GoR-Server registriert, sobald der geschützte Token geladen wurde. Dieser Schritt wartet nicht mehr auf die Gateway-Verbindung oder die automatische Servereinrichtung. Anwendung und Zielserver werden vorher über Discord geprüft. Nach erfolgreicher Registrierung läuft alle 15 Minuten eine erneute Prüfung; fehlgeschlagene Versuche werden nach einer Minute erneut geprüft. Ein einzelner abgelehnter Befehl blockiert die übrigen nicht.
@@ -80,7 +92,7 @@ Der Dienst verwendet das Repository **JuhlYT/GoR_Network_Discord**, Branch **mai
 
 Relative und zitierte Datenpfade werden einheitlich aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Absolute Pfade bleiben am bisherigen Ort. Ein fehlendes Volume erlaubt Orientierung und Rollenwahl; private Fälle, Veröffentlichungen und dauerhafte Verwaltung bleiben bis zur Vorbereitung pausiert.
 
-`service_starting` nennt die Version. Erst **`discord_ready`** bestätigt die geprüfte Discord-Verbindung; **`commands_registered`** mit 29 bestätigten Befehlen bestätigt die Registrierung. Ein grüner Build allein bestätigt den Login nicht. Fehlende Token und nicht rechtzeitig bestätigte Verbindungen beenden den Start mit einem festen Diagnosecode. Tokenwerte und fremde Fehlerkörper werden nicht protokolliert.
+`service_starting` nennt die Version. Erst **`discord_ready`** bestätigt die geprüfte Discord-Verbindung; **`commands_registered`** mit 39 bestätigten Befehlen bestätigt die Registrierung. Ein grüner Build allein bestätigt den Login nicht. Fehlende Token und nicht rechtzeitig bestätigte Verbindungen beenden den Start mit einem festen Diagnosecode. Tokenwerte und fremde Fehlerkörper werden nicht protokolliert.
 
 Die optionale Infrastructure-as-Code-Konfiguration steht unter `.railway/railway.ts`. Ein Apply gehört nur in das zugehörige GoR-Projekt, nachdem der Plan geprüft wurde; ein bestehender versiegelter Token wird mit `preserve()` erhalten.
 

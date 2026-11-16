@@ -53,6 +53,7 @@ class FixtureClient extends EventEmitter {
     },
   };
   guild: any = { id: GUILD, ownerId: "fixture-owner", commands: this.commands,
+    scheduledEvents:{fetch:async()=>new Collection()},
     members: {
       fetch: async ({ user }: { user: string }) => ({ id: user, pending: false, guild: this.guild, roles: { cache: new Collection() } }),
       fetchMe: async () => ({ permissions: { has: (permission: bigint) => permission === P.Administrator && Bun.env.GOR_FIXTURE_ADMIN === "true" } }),
@@ -67,9 +68,11 @@ class FixtureClient extends EventEmitter {
   }
   async destroy() { this.connected = false; }
   runFlow(flow: string) {
-    const component = ["public-guide", "private-guide", "private-roles"].includes(flow);
+    const component = ["public-guide", "private-guide", "private-roles", "payment", "statusbutton"].includes(flow);
+    const modalSubmit=flow==="legacy-payment";
     const privateCard = flow.startsWith("private-");
-    const command = ({ start: "start", own: "meine_faelle", team: "team", phase: "projektstatus", project: "projektanfrage", setup: "einrichten", setupstatus: "einrichtung" } as Record<string, string>)[flow] || "start";
+    const command = ({ start: "start", own: "meine_faelle", team: "team", phase: "projektstatus", project: "projektanfrage", setup: "einrichten", setupstatus: "einrichtung",
+      legal:"rechtliches",mydata:"meine_daten",privacy:"datenanfrage",complaint:"beschwerde",ideaform:"ideen",ideas:"ideen",events:"events",finance:"finanzbericht",updatedenied:"update_vorschau",financedenied:"finanzbericht" } as Record<string, string>)[flow] || "start";
     let acknowledgment = "";
     const verify = (payload: any) => {
       if (acknowledgment !== (privateCard ? "update" : "reply")) throw new Error("Incorrect private/public acknowledgment");
@@ -81,18 +84,28 @@ class FixtureClient extends EventEmitter {
         : flow === "own" ? title.includes("Deine Anliegen")
         : flow === "team" ? body.includes("keine Fallzuständigkeit") && !payload.embeds.length
         : flow === "phase" || flow === "setupstatus" ? body.includes("Networkleitung") && !payload.embeds.length
-        : flow === "setup" ? body.includes("Serverinhaber") && !payload.embeds.length : false;
+        : flow === "setup" || flow==="updatedenied" ? body.includes("Serverinhaber") && !payload.embeds.length
+        : flow==="financedenied" ? body.includes("Finanzzuständigkeit") && !payload.embeds.length
+        : flow==="legal" ? title.includes("Rechtliches")
+        : flow==="mydata" ? title.includes("Deine eigenen Botdaten")
+        : flow==="payment" || flow==="legacy-payment" ? title.includes("Zahlungsfragen")
+        : flow==="statusbutton" ? title.includes("Betrieb & Kontakt")
+        : flow==="ideas" ? title.includes("Ideen mit")
+        : flow==="events" ? title.includes("Gemeinsam etwas erleben")
+        : flow==="finance" ? title.includes("Geprüfter Finanzbericht") : false;
       if (!valid) throw new Error("Unexpected flow result");
       console.log("fixture_flow_passed:" + flow);
     };
     const interaction: any = {
       id: "fixture-" + flow, guildId: GUILD, guild: this.guild, user: { id: "fixture-member" }, member: { pending: false },
       deferred: false, replied: false, commandName: command,
-      customId: flow === "private-roles" ? "gor:roles:open:v5" : "gor:guide:v5:" + (privateCard ? "spiele" : "start"),
+      customId: flow === "private-roles" ? "gor:roles:open:v5" : flow==="payment"?"gor44:payment":flow==="legacy-payment"?"gor:case:zahlung":flow==="statusbutton"?"gor44:status":"gor:guide:v5:" + (privateCard ? "spiele" : "start"),
       message: { flags: { has: (flag: number) => flag === MessageFlags.Ephemeral && privateCard } },
-      options: { getString: () => null, getInteger: () => 1 },
-      isRepliable: () => true, isChatInputCommand: () => !component, isButton: () => component,
-      isMessageComponent: () => component, isStringSelectMenu: () => false, isModalSubmit: () => false,
+      options: { getString: (name:string) => name==="aktion" && flow==="ideaform"?"vorschlagen":name==="aktion" && flow==="financedenied"?"entwurf":null,
+        getInteger: () => null,getBoolean:()=>false,getUser:()=>null,getNumber:()=>null },
+      fields:{getTextInputValue:()=>{throw new Error("A legacy payment payload must never be read");}},
+      isRepliable: () => true, isChatInputCommand: () => !component && !modalSubmit, isButton: () => component,
+      isMessageComponent: () => component, isStringSelectMenu: () => false, isModalSubmit: () => modalSubmit,
       deferReply: async (options: any) => {
         if (privateCard || options.flags !== MessageFlags.Ephemeral) throw new Error("Expected private reply");
         acknowledgment = "reply"; interaction.deferred = true;
@@ -103,9 +116,10 @@ class FixtureClient extends EventEmitter {
       },
       editReply: async (payload: any) => verify(payload),
       showModal: async (modal: any) => {
-        if (flow !== "project" || modal.toJSON().custom_id !== "gor:project:v5" || modal.toJSON().components.length !== 5)
-          throw new Error("Project intake route failed");
-        console.log("fixture_flow_passed:project");
+        const data=modal.toJSON(),wanted=({project:"gor:project:v5",privacy:"gor44:privacy:auskunft",complaint:"gor44:complaint:none",ideaform:"gor44:idea:new"} as Record<string,string>)[flow];
+        if(!wanted || data.custom_id!==wanted || (flow==="project" && data.components.length!==5))throw new Error("Modal routing failed");
+        if(acknowledgment)throw new Error("A modal was deferred before being shown");
+        console.log("fixture_flow_passed:"+flow);
       },
     };
     this.emit(Events.InteractionCreate, interaction);

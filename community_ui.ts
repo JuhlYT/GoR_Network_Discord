@@ -30,7 +30,7 @@ export function pageWindow<T>(items: T[], requested = 1, size = 8) {
   return { items: items.slice((page - 1) * size, page * size), page, pages, total: items.length };
 }
 function card(title: string, text: string) {
-  return new EmbedBuilder().setColor(0x21cce2).setTitle(title).setDescription(text)
+  return new EmbedBuilder().setColor(0xd9ab56).setTitle(title).setDescription(text)
     .setFooter({ text: "GoR Network · Gemeinsam spielen. Gemeinsam wachsen." });
 }
 function button(id: string, label: string, style = ButtonStyle.Secondary) {
@@ -44,11 +44,14 @@ export function communityNavigation() {
   ), new ActionRowBuilder<ButtonBuilder>().addComponents(
     button("gor:guide:v5:faq", "Häufige Fragen"), button("gor:own:v5", "Meine Anliegen"),
     button("gor:guide:v5:unterstuetzen", "GoR unterstützen"),
+  ), new ActionRowBuilder<ButtonBuilder>().addComponents(
+    button("gor44:events", "Events"), button("gor44:ideas", "Ideen & Fortschritt"),
+    button("gor44:legal", "Kontakt & Rechtliches"), button("gor44:status", "Botstatus prüfen"),
   )].map(row => row.toJSON());
 }
 export function faqView(topic: string | undefined, channels: Channels) {
   const answers: Record<keyof typeof FAQ_TOPICS, string> = {
-    einstieg: `Lies <#${channels.regeln}>, wähle mit /rollen deine Interessen und stelle dich in <#${channels.vorstellungen}> vor. In <#${channels.mitspielersuche}> findest du deine nächste Spielrunde.`,
+    einstieg: `Lies <#${channels.regeln}>, wähle mit /rollen deine Interessen und finde in <#${channels.mitspielersuche}> deine nächste Runde. Eine Vorstellung in <#${channels.vorstellungen}> und Sprachchat sind freiwillig.`,
     rollen: "Mit /rollen bestimmst du selbst, welche Spiel- und Benachrichtigungsrollen du möchtest. Du kannst sie jederzeit ändern. Deine anderen Rollen bleiben erhalten.",
     support: `Nutze /support für ein persönliches Anliegen und /meine_faelle für den Bearbeitungsstand. Allgemeine Fragen passen in <#${channels.fragen}>. Das Team arbeitet ehrenamtlich; eine feste Antwortzeit wird nicht versprochen.`,
     projekt: "Alle Spiele sind willkommen. Stelle dein Vorhaben über /projektanfrage vor: Spiel, Konzept, aktueller Stand und gewünschte Zusammenarbeit. Die Leitung prüft es, bespricht die nächsten Schritte und kann eine Pilotphase vereinbaren.",
@@ -75,12 +78,12 @@ export function guideView(topic: string, channels: Channels) {
       .addFields(
         { name: "Zeit & Ideen", value: `Organisiere eine Spielrunde, hilf neuen Mitgliedern oder teile einen Vorschlag in <#${channels.ideen}>.` },
         { name: "Know-how & Reichweite", value: "Du kannst entwickeln, gestalten, bei Events helfen oder GoR passenden Communities vorstellen. Besprich ein konkretes Angebot über /support mit der Leitung." },
-        { name: "Freiwillige Finanzierung", value: `Informationen und Verwendungszwecke: <#${channels["gor-unterstuetzen"]}>\nKosten & aktueller Stand: <#${channels["kosten-und-stand"]}>\nZahlungsfragen bitte ausschließlich im privaten Support klären.` },
+        { name: "Freiwillige Finanzierung", value: `Network, persönliche Aufrufe und Feuerwehrweitergaben haben getrennte Zwecke. Informationen: <#${channels["gor-unterstuetzen"]}>\nGeprüfte Zahlen: /finanzbericht\nZahlungsunterlagen ausschließlich über den externen Kontakt unter /rechtliches klären.` },
       );
   } else {
-    view = card("Willkommen bei GoR Network", "**Ein Network. Viele Spiele. Deine Community.**\nFinde deine Leute, entdecke Projekte und gestalte mit uns den nächsten Schritt.")
+    view = card("Willkommen bei GoR Network", "**Moin! Ein Network. Viele Spiele. Deine Community.**\nEntdecke dein Spiel, finde Mitspieler und bekomme Hilfe. Du gehörst auch ohne Zahlung dazu.")
       .addFields(
-        { name: "01 · Ankommen", value: `Unsere Regeln: <#${channels.regeln}>\nSag Hallo: <#${channels.vorstellungen}>`, inline: true },
+        { name: "01 · Ankommen", value: `Unsere Regeln: <#${channels.regeln}>\nFreiwillig Hallo sagen: <#${channels.vorstellungen}>`, inline: true },
         { name: "02 · Mitspielen", value: `Deine Interessen: /rollen\nGemeinsam loslegen: <#${channels.mitspielersuche}>`, inline: true },
         { name: "03 · Mitgestalten", value: `Deine Idee: <#${channels.ideen}>\nDein Serverprojekt: /projektanfrage`, inline: true },
         { name: "Deine Anlaufstellen", value: `Neuigkeiten: <#${channels.neuigkeiten}> · Projekte: <#${channels.projekte}> · Termine: <#${channels.termine}>\nPersönliche Hilfe: /support · Deine Anfragen: /meine_faelle` },

@@ -57,7 +57,7 @@ export async function reconcileNative(setup: AutoSetup) {
   await setup.step("guild:profile", async () => {
     const me = await guild.members.fetchMe(), patch: Record<string, any> = {};
     if (!me.permissions.has(P.ManageGuild)) throw setupError("missing_permissions");
-    if (guild.name !== "GoR Network") patch.name = "GoR Network";
+    if (guild.name !== "GoR Network" && !setup.protected("guild:profile","name")) patch.name = "GoR Network";
     if (guild.afkChannelId !== maps.channels["voice-afk"]) patch.afkChannel = maps.channels["voice-afk"];
     if (guild.afkTimeout !== 300) patch.afkTimeout = 300;
     if (guild.systemChannelId !== maps.channels.lounge) patch.systemChannel = maps.channels.lounge;
@@ -71,16 +71,16 @@ export async function reconcileNative(setup: AutoSetup) {
     if (guild.rulesChannelId !== maps.channels.regeln) patch.rulesChannel = maps.channels.regeln;
     if (guild.publicUpdatesChannelId !== maps.channels["discord-updates"]) patch.publicUpdatesChannel = maps.channels["discord-updates"];
     if (guild.preferredLocale !== "de") patch.preferredLocale = "de";
-    if (guild.description !== DESCRIPTION) patch.description = DESCRIPTION;
+    if (guild.description !== DESCRIPTION && !setup.protected("guild:profile","description")) patch.description = DESCRIPTION;
     for (const key of [maps.channels["voice-afk"], maps.channels.lounge, maps.channels.regeln, maps.channels["discord-updates"]])
       if (!setup.channels.has(key)) throw setupError("dependency_missing");
     if (!Object.keys(patch).length) { setup.report.unchanged++; return; }
     setup.journal.snapshot("guild:profile", { name: guild.name, afkChannelId: guild.afkChannelId, rulesChannelId: guild.rulesChannelId, publicUpdatesChannelId: guild.publicUpdatesChannelId, description: guild.description });
     await guild.edit({ ...patch, reason: REASON });
     const actual = await guild.fetch();
-    if (actual.name !== "GoR Network" || !actual.features.includes("COMMUNITY") || actual.rulesChannelId !== maps.channels.regeln
+    if ((!setup.protected("guild:profile","name") && actual.name !== "GoR Network") || !actual.features.includes("COMMUNITY") || actual.rulesChannelId !== maps.channels.regeln
       || actual.publicUpdatesChannelId !== maps.channels["discord-updates"] || actual.afkChannelId !== maps.channels["voice-afk"]
-      || actual.afkTimeout !== 300 || actual.systemChannelId !== maps.channels.lounge || actual.description !== DESCRIPTION
+      || actual.afkTimeout !== 300 || actual.systemChannelId !== maps.channels.lounge || (!setup.protected("guild:profile","description") && actual.description !== DESCRIPTION)
       || actual.preferredLocale !== "de" || actual.defaultMessageNotifications !== GuildDefaultMessageNotifications.OnlyMentions
       || actual.verificationLevel < GuildVerificationLevel.Low || actual.explicitContentFilter !== GuildExplicitContentFilter.AllMembers) throw setupError("verification_failed");
     setup.report.updated++;

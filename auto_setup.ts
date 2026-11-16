@@ -6,10 +6,12 @@ import { BASIC, MOD, PRIVATE_PROFILES, compatibleType, overwriteShape, profileOv
 import { MESSAGE_KEYS, setupMessage } from "./server_content";
 import { sameCommunityPanel } from "./community_ui";
 import { reconcileNative } from "./setup_native";
+import { protectedField } from "./change_plan";
+import type { LegalLinks } from "./legal_config";
 
 export type SetupMaps = { roles: Record<string, string>; categories: Record<string, string>; channels: Record<string, string> };
 export type SetupStorage = { db: Database; setting(key: string, value?: string): string | undefined };
-export type SetupContext = { guild: Guild; application: string; target: string; maps: SetupMaps; storage: SetupStorage; stopped?: () => boolean; layout?: Layout };
+export type SetupContext = { guild: Guild; application: string; target: string; maps: SetupMaps; storage: SetupStorage; stopped?: () => boolean; layout?: Layout; legal?: LegalLinks };
 export type SetupReport = { at: number; created: number; updated: number; unchanged: number; adopted: number; issues: { key: string; code: string }[]; status: string };
 export const SETUP_ISSUES: Record<string, string> = {
   missing_permissions: "Dem Bot fehlen Rechte für diesen Bereich.", role_uneditable: "Die Rolle liegt über der Botrolle oder wird von Discord verwaltet.",
@@ -52,6 +54,7 @@ export class AutoSetup {
   channels = new Map<string, any>();
   highest: any = null;
   constructor(readonly ctx: SetupContext) { this.journal = new SetupJournal(ctx.storage.db); this.layout = ctx.layout || LAYOUT; }
+  protected(key: string,field: string) { return protectedField(this.ctx.storage,key,field); }
   check() {
     if (this.ctx.stopped?.()) throw setupError("cancelled");
     if (!this.journal.renew(this.owner)) throw setupError("lease_lost");
@@ -90,9 +93,9 @@ export class AutoSetup {
     if (target.managed) throw setupError("role_uneditable");
     this.ctx.maps.roles[spec.key] = target.id;
     const patch: Record<string, any> = {};
-    if (target.name !== spec.name) patch.name = spec.name;
-    if (target.color !== spec.color) patch.color = spec.color;
-    if (target.hoist !== spec.hoist) patch.hoist = spec.hoist;
+    if (target.name !== spec.name && !this.protected(key,"name")) patch.name = spec.name;
+    if (target.color !== spec.color && !this.protected(key,"color")) patch.color = spec.color;
+    if (target.hoist !== spec.hoist && !this.protected(key,"hoist")) patch.hoist = spec.hoist;
     if (target.mentionable) patch.mentionable = false;
     if (spec.selfAssignable && target.permissions.bitfield !== 0n) patch.permissions = 0n;
     if (["networkleitung", "communityleitung", "moderation"].includes(spec.key) && (target.permissions.bitfield & MOD) !== MOD)
@@ -124,18 +127,18 @@ export class AutoSetup {
     if (target.topic?.startsWith("gor-case:")) throw setupError("resource_type");
     mapping[spec.key] = target.id;
     const patch: Record<string, any> = {};
-    if (target.name !== spec.name) patch.name = spec.name;
+    if (target.name !== spec.name && !this.protected(key,"name")) patch.name = spec.name;
     if (!category && target.parentId !== parent) patch.parent = parent;
-    if (type === "text" && target.topic !== spec.topic) patch.topic = spec.topic;
-    if (type === "text" && target.rateLimitPerUser !== spec.slowmode) patch.rateLimitPerUser = spec.slowmode;
+    if (type === "text" && target.topic !== spec.topic && !this.protected(key,"topic")) patch.topic = spec.topic;
+    if (type === "text" && target.rateLimitPerUser !== spec.slowmode && !this.protected(key,"rateLimitPerUser")) patch.rateLimitPerUser = spec.slowmode;
     if (overwriteShape(target.permissionOverwrites.cache.values()) !== overwriteShape(permissions)) patch.permissionOverwrites = permissions;
     if (!Object.keys(patch).length) { this.report.unchanged++; return; }
     this.journal.snapshot(key, { id: target.id, name: target.name, parentId: target.parentId, topic: target.topic, slowmode: target.rateLimitPerUser,
       overwrites: [...target.permissionOverwrites.cache.values()].map((o: any) => ({ id: o.id, type: o.type, allow: String(o.allow.bitfield), deny: String(o.deny.bitfield) })) });
     await this.ctx.guild.channels.edit(target.id, { ...patch, reason: "GoR Gestaltung und Bereichsrechte" });
     const actual: any = await this.ctx.guild.channels.fetch(target.id, { force: true });
-    if (!actual || actual.name !== spec.name || (!category && actual.parentId !== parent)
-        || (type === "text" && (actual.topic !== spec.topic || actual.rateLimitPerUser !== spec.slowmode))
+    if (!actual || (!this.protected(key,"name") && actual.name !== spec.name) || (!category && actual.parentId !== parent)
+        || (type === "text" && ((!this.protected(key,"topic") && actual.topic !== spec.topic) || (!this.protected(key,"rateLimitPerUser") && actual.rateLimitPerUser !== spec.slowmode)))
         || overwriteShape(actual.permissionOverwrites.cache.values()) !== overwriteShape(permissions)) throw setupError("verification_failed");
     this.channels.set(actual.id, actual); this.report.updated++;
   }
@@ -164,7 +167,7 @@ export class AutoSetup {
   async message(key: string) {
     const channel: any = this.channels.get(this.ctx.maps.channels[key]);
     if (!channel || !compatibleType(channel.type, "text")) throw setupError("dependency_missing");
-    const resource = "message:" + key, payload = setupMessage(key, this.ctx.maps.channels);
+    const resource = "message:" + key, payload = setupMessage(key, this.ctx.maps.channels,this.ctx.legal);
     const setting = key === "start" ? "community_panel_message_id" : key === "support" ? "panel_message_id" : undefined;
     const saved = this.journal.get(resource), previous = setting ? this.ctx.storage.setting(setting) : undefined;
     const id = saved?.id || (previous === "pending" ? undefined : previous || LEGACY_MESSAGE_IDS[key]);

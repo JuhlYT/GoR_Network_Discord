@@ -34,12 +34,12 @@ function fixture() {
 }
 
 describe("Gateway-unabhängige Befehlsregistrierung", () => {
-  test("29 guild commands are confirmed by a fresh read; healthy definitions and foreign commands stay intact", async () => {
+  test("39 guild commands are confirmed by a fresh read; healthy definitions and foreign commands stay intact", async () => {
     const f = fixture(); f.entries.set("foreign", { id: "foreign", name: "foreign", description: "Unmanaged", type: 1 });
     const run = () => syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions());
-    expect(await run()).toMatchObject({ confirmed: 29, created: 29, updated: 0 });
+    expect(await run()).toMatchObject({ confirmed: 39, created: 39, updated: 0 });
     f.writes.length = 0;
-    expect(await run()).toMatchObject({ confirmed: 29, created: 0, updated: 0 });
+    expect(await run()).toMatchObject({ confirmed: 39, created: 0, updated: 0 });
     expect(f.writes).toHaveLength(0); expect(f.entries.has("foreign")).toBe(true);
   });
   test("a rejected command does not prevent later commands; the next attempt only repairs the missing command", async () => {
@@ -48,15 +48,15 @@ describe("Gateway-unabhängige Befehlsregistrierung", () => {
     try { await syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions(), { failure: name => failures.push(name) }); }
     catch (e) { error = e; }
     expect(error).toBeInstanceOf(CommandRegistrationError);
-    expect(error).toMatchObject({ code: "commands_unconfirmed", confirmed: 28, total: 29 });
+    expect(error).toMatchObject({ code: "commands_unconfirmed", confirmed: 38, total: 39 });
     expect(f.entries.has("backup")).toBe(true); expect(failures).toEqual(["faq"]);
     f.reject(""); f.writes.length = 0;
-    expect(await syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions())).toMatchObject({ confirmed: 29, created: 1 });
+    expect(await syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions())).toMatchObject({ confirmed: 39, created: 1 });
     expect(f.writes.map(w => w.body.name)).toEqual(["faq"]);
   });
   test("a lost response is confirmed by reading Discord and does not create a duplicate", async () => {
     const f = fixture(); f.responseLost("start");
-    expect(await syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions())).toMatchObject({ confirmed: 29 });
+    expect(await syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions())).toMatchObject({ confirmed: 39 });
     expect(f.writes.filter(w => w.body.name === "start")).toHaveLength(1);
   });
   test("wrong application, wrong target and cancellation cannot publish commands", async () => {
@@ -89,10 +89,10 @@ describe("Gateway-unabhängige Befehlsregistrierung", () => {
   test("failed audits retry after a minute and overlapping syncs never double-publish", async () => {
     const f = fixture(); let clock = 0; f.reject("faq");
     const registrar = new CommandRegistrar(() => syncRestCommands(f.rest, APPLICATION, GUILD, commandDefinitions()), () => clock);
-    await expect(registrar.sync()).rejects.toMatchObject({ confirmed: 28 });
+    await expect(registrar.sync()).rejects.toMatchObject({ confirmed: 38 });
     expect(registrar.ready).toBe(false); f.reject(""); f.writes.length = 0;
     clock = 59_999; expect(await registrar.sync()).toBeNull();
     clock = 60_000; const pending = registrar.sync(); expect(await registrar.sync(true)).toBeNull(); await pending;
-    expect(registrar.ready).toBe(true); expect(registrar.confirmed).toBe(29); expect(f.writes.map(w => w.body.name)).toEqual(["faq"]);
+    expect(registrar.ready).toBe(true); expect(registrar.confirmed).toBe(39); expect(f.writes.map(w => w.body.name)).toEqual(["faq"]);
   });
 });
