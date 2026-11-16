@@ -120,6 +120,7 @@ export async function reconcileNative(setup: AutoSetup) {
       actions: [{ type: AutoModerationActionType.BlockMessage, metadata: { customMessage: "Bitte verzichte auf massenhafte Erwähnungen." } }], reason: REASON };
     if (desired.exemptRoles.some(id => !setup.roles.has(id))) throw setupError("dependency_missing");
     if (!rule) {
+      if (setup.ctx.allowCreate === false) throw setupError("storage_required");
       const pending = setup.journal.begin("automod:mentions");
       if (!pending.fresh) throw setupError("creation_unknown");
       rule = await guild.autoModerationRules.create(desired); setup.journal.bind("automod:mentions", rule.id); setup.report.created++;

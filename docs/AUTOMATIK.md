@@ -1,6 +1,10 @@
 # Automatische GoR-Einrichtung
 
-Version 4.3.0 gleicht nach jedem bestätigten Botstart die konfigurierte GoR-Struktur ab. Danach erfolgt der Abgleich alle 15 Minuten. Bei offenen Fehlern wird nach fünf Minuten erneut geprüft; eine belegte Einrichtungssperre wird nach einer Minute erneut geprüft. Ein laufender Abgleich bleibt auf eine Instanz begrenzt. Die Discord-Verbindung ist von der Einrichtung getrennt und bleibt bei einzelnen Einrichtungsfehlern verfügbar.
+Version 4.5.0 gleicht nach jedem bestätigten Botstart die konfigurierte GoR-Struktur ab. Danach erfolgt der Abgleich bei Änderungen an verwalteten Rollen, Kanälen und Serverprofil sowie spätestens alle 15 Minuten. Ereignisse werden fünf Sekunden zusammengefasst; eigene laufende Änderungen lösen keine neue Ereignisschleife aus. Bei offenen Fehlern wird nach fünf Minuten erneut geprüft; eine belegte Einrichtungssperre wird nach einer Minute erneut geprüft. Ein laufender Abgleich bleibt auf eine Instanz begrenzt. Die Discord-Verbindung ist von der Einrichtung getrennt und bleibt bei einzelnen Einrichtungsfehlern verfügbar.
+
+Ohne Railway-Volume wird die Gestaltung bereits bekannter GoR-Bereiche ausgeführt. Rollenfarben, Namen, Themen, Rechte, Reihenfolge, vorhandene eigene Infotafeln und native Einstellungen werden geprüft und bei Bedarf repariert. Ein fehlender Eintrag wird als `storage_required` gemeldet; neue Anlagen bleiben ohne dauerhaftes Journal gesperrt. Persönliche Supportfälle und Finanzvorgänge werden dadurch nicht freigeschaltet. Der vollständige Ablauf steht in [UPDATE_4_5.md](UPDATE_4_5.md).
+
+`/einrichtung` enthält persönliche Steuerknöpfe für den Serverinhaber: **Server jetzt gestalten**, **Änderungen ansehen**, **Automatik pausieren/fortsetzen** und **Botstatus**. Die Berechtigung wird bei jedem Klick frisch geprüft. Ohne Volume gilt eine dort gewählte Pause bis zum nächsten Botstart. `GOR_AUTO_SETUP=false` bleibt eine übergeordnete Laufzeitpause; ein ausdrücklich gestarteter einmaliger Abgleich ist weiter möglich.
 
 ## Umfang
 

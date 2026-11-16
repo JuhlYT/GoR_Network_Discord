@@ -1,10 +1,11 @@
 /** Process fixture: no Discord network requests and no real credential. */
 import { EventEmitter } from "node:events";
 import { Client, Collection, Events, MessageFlags, PermissionFlagsBits as P, Routes } from "discord.js";
-import { APPLICATION, GUILD, main } from "../../gor_network";
+import { APPLICATION, GUILD, CHANNELS, ROLES, main } from "../../gor_network";
 
 class FixtureClient extends EventEmitter {
   connected = false;
+  setupCalls = 0;
   application = { id: APPLICATION, fetch: async () => this.application };
   user = { id: Bun.env.GOR_FIXTURE_WRONG_APP === "true" ? "0" : APPLICATION,
     setPresence: (presence: any) => {
@@ -68,9 +69,23 @@ class FixtureClient extends EventEmitter {
   }
   async destroy() { this.connected = false; }
   runFlow(flow: string) {
-    const component = ["public-guide", "private-guide", "private-roles", "payment", "statusbutton"].includes(flow);
+    if(flow==="design-drift") {
+      const before=this.setupCalls;
+      this.emit(Events.ChannelUpdate,{}, {id:"unrelated",guild:this.guild});
+      this.emit(Events.GuildRoleUpdate,{}, {id:ROLES.support,guild:{id:"another-guild"}});
+      setTimeout(()=>{
+        if(this.setupCalls!==before)throw new Error("Unrelated resources triggered layout writes");
+        this.emit(Events.GuildRoleUpdate,{}, {id:ROLES.support,guild:this.guild});
+        this.emit(Events.ChannelUpdate,{}, {id:CHANNELS.start,guild:this.guild});
+        setTimeout(()=>{
+          if(this.setupCalls!==before+1)throw new Error("Managed changes were not coalesced into one repair");
+          console.log("fixture_flow_passed:"+flow);
+        },30);
+      },10);return;
+    }
+    const component = ["public-guide", "private-guide", "private-roles", "payment", "statusbutton", "design-start", "design-start-temporary", "design-denied", "design-pause", "design-resume"].includes(flow);
     const modalSubmit=flow==="legacy-payment";
-    const privateCard = flow.startsWith("private-");
+    const privateCard = flow.startsWith("private-") || flow.startsWith("design-");
     const command = ({ start: "start", own: "meine_faelle", team: "team", phase: "projektstatus", project: "projektanfrage", setup: "einrichten", setupstatus: "einrichtung",
       legal:"rechtliches",mydata:"meine_daten",privacy:"datenanfrage",complaint:"beschwerde",ideaform:"ideen",ideas:"ideen",events:"events",finance:"finanzbericht",updatedenied:"update_vorschau",financedenied:"finanzbericht" } as Record<string, string>)[flow] || "start";
     let acknowledgment = "";
@@ -78,7 +93,11 @@ class FixtureClient extends EventEmitter {
       if (acknowledgment !== (privateCard ? "update" : "reply")) throw new Error("Incorrect private/public acknowledgment");
       if (payload.allowedMentions?.parse?.length !== 0) throw new Error("Unexpected mention behavior");
       const title = payload.embeds?.[0]?.title || "", body = payload.content || "";
-      const valid = flow === "start" || flow === "public-guide" ? title.includes("Willkommen")
+      const valid = flow==="design-start" || flow==="design-start-temporary" ? body.includes("Servergestaltung wurde gestartet")
+        : flow==="design-denied" ? body.includes("Serverinhaber")
+        : flow==="design-pause" ? body.includes("Servergestaltung ist pausiert")
+        : flow==="design-resume" ? body.includes("Servergestaltung ist aktiviert")
+        : flow === "start" || flow === "public-guide" ? title.includes("Willkommen")
         : flow === "private-guide" ? title.includes("Viele Spiele")
         : flow === "private-roles" ? title.includes("Interessen")
         : flow === "own" ? title.includes("Deine Anliegen")
@@ -94,12 +113,21 @@ class FixtureClient extends EventEmitter {
         : flow==="events" ? title.includes("Gemeinsam etwas erleben")
         : flow==="finance" ? title.includes("Geprüfter Finanzbericht") : false;
       if (!valid) throw new Error("Unexpected flow result");
+      if(flow==="design-pause") {
+        const before=this.setupCalls;
+        this.emit(Events.ChannelUpdate,{}, {id:CHANNELS.start,guild:this.guild});
+        setTimeout(()=>{
+          if(this.setupCalls!==before)throw new Error("Paused layout reacted to a managed change");
+          console.log("fixture_flow_passed:"+flow);
+        },30);return;
+      }
       console.log("fixture_flow_passed:" + flow);
     };
     const interaction: any = {
-      id: "fixture-" + flow, guildId: GUILD, guild: this.guild, user: { id: "fixture-member" }, member: { pending: false },
+      id: "fixture-" + flow, guildId: GUILD, guild: this.guild, user: { id: flow.startsWith("design-") && flow!=="design-denied" ? "fixture-owner" : "fixture-member" }, member: { pending: false },
       deferred: false, replied: false, commandName: command,
-      customId: flow === "private-roles" ? "gor:roles:open:v5" : flow==="payment"?"gor44:payment":flow==="legacy-payment"?"gor:case:zahlung":flow==="statusbutton"?"gor44:status":"gor:guide:v5:" + (privateCard ? "spiele" : "start"),
+      customId: flow==="design-pause"?"gor:setup:pause:v6":flow==="design-resume"?"gor:setup:resume:v6":
+        flow.startsWith("design-")?"gor:setup:start:v6":flow === "private-roles" ? "gor:roles:open:v5" : flow==="payment"?"gor44:payment":flow==="legacy-payment"?"gor:case:zahlung":flow==="statusbutton"?"gor44:status":"gor:guide:v5:" + (privateCard ? "spiele" : "start"),
       message: { flags: { has: (flag: number) => flag === MessageFlags.Ephemeral && privateCard } },
       options: { getString: (name:string) => name==="aktion" && flow==="ideaform"?"vorschlagen":name==="aktion" && flow==="financedenied"?"entwurf":null,
         getInteger: () => null,getBoolean:()=>false,getUser:()=>null,getNumber:()=>null },
@@ -126,9 +154,13 @@ class FixtureClient extends EventEmitter {
   }
 }
 
-await main({ createClient: () => new FixtureClient() as unknown as Client,
+const fixtureClient=new FixtureClient();
+await main({ createClient: () => fixtureClient as unknown as Client, setupDebounceMs:5,
   startupTimeoutMs: Bun.env.GOR_FIXTURE_HANG === "true" ? 300 : undefined,
-  setupRunner: Bun.env.GOR_FIXTURE_SETUP ? async () => {
+  setupRunner: Bun.env.GOR_FIXTURE_SETUP ? async context => {
+    fixtureClient.setupCalls++;
+    const temporary=!Bun.env.RAILWAY_VOLUME_MOUNT_PATH;
+    if(context.allowCreate===temporary)throw new Error("Unsafe or unnecessarily blocked setup policy");
     console.log("fixture_automatic_setup_called");
     if (Bun.env.GOR_FIXTURE_SETUP === "setup-failure") throw Object.assign(new Error("private-fixture-body"), { code: 50013 });
     return { at: Date.now(), created: 0, updated: 0, unchanged: 1, adopted: 0, issues: [], status: "ready" };

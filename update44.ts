@@ -8,6 +8,7 @@ import { RemoteBackup } from "./backup_remote";
 import { captureChangePlan, setProtection, protections } from "./change_plan";
 import { financeReport, financeBalance, eventDraft, publishEvent, recoverEvent, type FinanceReport } from "./community_actions";
 import { DAY, PublicError, money, timestamp, snowflake, cleanText } from "./feature_base";
+import { SETUP_CONTROLS, setupPolicy } from "./setup_controls";
 import type { SetupMaps, SetupReport } from "./auto_setup";
 
 type Context = {
@@ -61,7 +62,7 @@ export class Update44 {
   }
   async status(i:any) {
     const s=this.ctx.status(), legal=this.links();
-    await this.send(i,"GoR · Betrieb & Kontakt",`**Version:** ${this.ctx.version}\n**Discord:** ${s.connected?"verbunden":"Verbindung wird hergestellt"}\n**Befehle:** ${s.commands?`${s.commandCount}/${s.commandTotal} bestätigt`: "Registrierung wird geprüft"}\n**Serverpflege:** ${s.setup}\n**Datenhaltung:** ${s.storage}\n**Externe Sicherung:** ${this.backup.state==="verified"?"verschlüsselt bestätigt":"Einrichtung / Prüfung offen"}\n\n**Kontaktwege:** ${legal.ready?"vom Inhaber bestätigt":"Angaben werden vervollständigt"}\nRechtliche Informationen und Kontakt: /rechtliches.\nDas bestätigt technische Zustände, keine juristische Abnahme.`,[row(button("gor44:legal","Kontakt & Rechtliches"))]);
+    await this.send(i,"GoR · Betrieb & Kontakt",`**Version:** ${this.ctx.version}\n**Discord:** ${s.connected?"verbunden":"Verbindung wird hergestellt"}\n**Befehle:** ${s.commands?`${s.commandCount}/${s.commandTotal} bestätigt`: "Registrierung wird geprüft"}\n**Serverpflege:** ${s.setup}\n**Datenhaltung:** ${s.storage}\n**Gestaltung:** ${setupPolicy(String(s.storage)).label}\n**Externe Sicherung:** ${this.backup.state==="verified"?"verschlüsselt bestätigt":"Einrichtung / Prüfung offen"}\n\n**Kontaktwege:** ${legal.ready?"vom Inhaber bestätigt":"Angaben werden vervollständigt"}\nRechtliche Informationen und Kontakt: /rechtliches.\nDas bestätigt technische Zustände, keine juristische Abnahme.`,[row(button("gor44:legal","Kontakt & Rechtliches"))]);
   }
   async legal(i:any) {
     const c=this.links(), visible=this.publicLinks();
@@ -256,9 +257,9 @@ export class Update44 {
       own(member);const number=await this.ctx.serial(()=>this.retention.apply(member.guild,id.split(":")[3],member.id));store.audit(member.id,"case_channel_delete",String(number));
       await this.send(i,"GoR · Fallkanal gelöscht",`Die Löschung von Fall #${number} wurde bestätigt. Personenbezogene Metadaten werden nach ihrer eigenen Frist und ohne aktive Aufbewahrungsausnahme entfernt.`);return true;
     }
-    if(command==="update_vorschau") {
+    if(command==="update_vorschau" || id===SETUP_CONTROLS.preview) {
       own(member);const plan=await captureChangePlan(member.guild,this.ctx.maps,store,this.ctx.application,this.ctx.version,this.publicLinks()),d=this.state.draft("update",member.id,plan);
-      await this.send(i,"GoR · Konkrete Änderungsvorschau",plan.scope+`\n\n**Erkannte Änderungen / Prüfpunkte: ${plan.summary.length}**\n`+(plan.summary.slice(0,12).map(v=>"• "+v).join("\n")||"Verwaltete Gestaltung, Bereichsrechte und Infotafeln sind bereits passend. Reihenfolge und native Einstellungen gehören zusätzlich zum ausdrücklich genannten Abgleich.")+`\n\nDie vollständige Liste steht in der beigefügten Datei. Vorgang: \`${d.id}\`\n15 Minuten gültig. Jede Änderung am geprüften Stand macht die Vorschau ungültig.`,[row(button("gor44:update:apply:"+d.id,"Diesen Abgleich anwenden",ButtonStyle.Success),button("gor44:draft:cancel:"+d.id,"Verwerfen"))],{files:[new AttachmentBuilder(Buffer.from(`${plan.scope}\n\n${plan.summary.join("\n")||"Keine Abweichungen an Gestaltung, Bereichsrechten oder Infotafeln."}\n\nGeschützte Felder: ${Object.keys(protections(store)).join(", ")||"keine"}\n\nVorgang: ${d.id}`),{name:"GoR_Aenderungsplan.txt"})]});return true;
+      await this.send(i,"GoR · Konkrete Änderungsvorschau",plan.scope+`\n\n${setupPolicy(String(this.ctx.status().storage)).notice}\n\n**Erkannte Änderungen / Prüfpunkte: ${plan.summary.length}**\n`+(plan.summary.slice(0,12).map(v=>"• "+v).join("\n")||"Verwaltete Gestaltung, Bereichsrechte und Infotafeln sind bereits passend. Reihenfolge und native Einstellungen gehören zusätzlich zum ausdrücklich genannten Abgleich.")+`\n\nDie vollständige Liste steht in der beigefügten Datei. Vorgang: \`${d.id}\`\n15 Minuten gültig. Jede Änderung am geprüften Stand macht die Vorschau ungültig.`,[row(button("gor44:update:apply:"+d.id,"Diesen Abgleich anwenden",ButtonStyle.Success),button("gor44:draft:cancel:"+d.id,"Verwerfen"))],{files:[new AttachmentBuilder(Buffer.from(`${plan.scope}\n\n${plan.summary.join("\n")||"Keine Abweichungen an Gestaltung, Bereichsrechten oder Infotafeln."}\n\nGeschützte Felder: ${Object.keys(protections(store)).join(", ")||"keine"}\n\nVorgang: ${d.id}`),{name:"GoR_Aenderungsplan.txt"})]});return true;
     }
     if(command==="update_anwenden" || id.startsWith("gor44:update:apply:")) {
       own(member);const draftId=command?i.options.getString("vorgang",true):id.split(":")[3];let claimed=false;

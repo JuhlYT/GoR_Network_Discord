@@ -120,6 +120,13 @@ describe("Railway-Startkonfiguration", () => {
     const config = runtimeSettings({ RAILWAY_ENVIRONMENT_ID: "fixture", GOR_DATA_DIR: "/data" });
     expect(config).toMatchObject({ storage: "temporary", directory: "/data", supportEnabled: false });
     expect(() => requireStorage(config, "status")).not.toThrow();
+    for(const action of ["einrichten","update_vorschau","update_anwenden","gor:setup:start:v6","gor:setup:pause:v6","gor:setup:resume:v6","gor:setup:preview:v6"])
+      expect(()=>requireStorage(config,action)).not.toThrow();
+    expect(()=>requireStorage(config,"gor:setup:unknown:v6")).toThrow(UserError);
+    try {requireStorage(config,"support");} catch(error:any) {
+      expect(error.code).toBe("storage_required");expect(error.message).toContain("Servergestaltung");
+      expect(error.message).not.toContain("wird gerade vorbereitet");
+    }
     expect(() => requireStorage(config, "rollen")).not.toThrow();
     expect(() => requireStorage(config, "gor:roles:v4")).not.toThrow();
     for (const action of ["support", "projektanfrage", "supportpanel", "gor:case:allgemein", "ankuendigung", "gor:publish:fixture", "backup", "faelle"])

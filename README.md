@@ -2,6 +2,14 @@
 
 Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverprojekte. GoR verbindet verschiedene Spiele und Communities unter einem Network.
 
+## Version 4.5.0: Servergestaltung direkt durch den Bot
+
+Die automatische Gestaltung startet auch ohne Railway-Volume für alle bereits eindeutig zugeordneten GoR-Rollen, Kategorien, Kanäle und eigenen Infotafeln. Ein fehlender Datenspeicher blockiert nicht mehr den gesamten Gestaltungsablauf. Neue Discord-Anlagen benötigen weiterhin das dauerhafte Journal, damit unklare Antworten nach einem Neustart keine Duplikate erzeugen. Private Fallverwaltung bleibt daran getrennt gebunden.
+
+`/einrichtung` enthält für den Inhaber **Server jetzt gestalten**, **Änderungen ansehen** und **Automatik pausieren/fortsetzen**. Änderungen an verwalteten Rollen, Kanälen und am Serverprofil lösen nach fünf Sekunden einen zusammengefassten Abgleich aus. Zusätzliche Bereiche werden nicht übernommen. Bei pausierter Automatik und während eigener Gestaltung werden keine Ereignisschleifen gestartet.
+
+Der vollständige Aufbau ist im Bot definiert: 16 Rollen, zehn Kategorien, 41 Kanäle und elf eigene Infotafeln sowie Community-Profil, AFK, Auswahlfragen und Erwähnungsschutz. Mit dauerhaftem Journal werden fehlende GoR-Einträge automatisch ergänzt. Details und technische Grenzen: [docs/UPDATE_4_5.md](docs/UPDATE_4_5.md).
+
 ## Version 4.4.0: Community, Datenschutz und kontrollierte Updates
 
 39 Befehle, ein überarbeitetes Menü in Gold, native Veranstaltungsplanung, öffentliche Ideen mit nachvollziehbarem Stand und einzeln freigegebene Finanzberichte. Datenschutzanfragen und Beschwerden haben gesonderte Zuständigkeiten. Zahlungsunterlagen werden nicht mehr in neuen Discord-Fällen erfasst.
@@ -24,7 +32,7 @@ Erst der Logeintrag `commands_registered` mit `confirmed: 29` bestätigt einen v
 
 ## Automatische Einrichtung seit Version 4.3.0
 
-Nach einer bestätigten Discord-Verbindung richtet sich der Bot selbst ein. Mit dauerhaftem Speicher startet die GoR-Pflege automatisch und gleicht den verwalteten Aufbau danach alle 15 Minuten erneut ab. Ein manuelles `/communitypanel` ist für den Einstieg nicht mehr erforderlich.
+Nach einer bestätigten Discord-Verbindung richtet sich der Bot selbst ein. Die GoR-Pflege startet automatisch und gleicht den verwalteten Aufbau danach bei Änderungen und spätestens alle 15 Minuten erneut ab. Ohne dauerhaftes Journal gestaltet sie vorhandene bekannte Bereiche; mit Journal ergänzt sie außerdem fehlende Einträge. Ein manuelles `/communitypanel` ist für den Einstieg nicht mehr erforderlich.
 
 - **16 Rollen:** vorhandene Rollen weiterverwenden, Farben und Darstellung vereinheitlichen, fehlende Rollen ergänzen und ihre Reihenfolge unterhalb der Botrolle ordnen. Auswahlrollen bleiben ohne globale Rechte. Vorhandene zusätzliche Teamrechte werden erhalten; Moderationsrollen erhalten die vorgesehenen Nachrichten- und Threadrechte.
 - **10 Kategorien und 41 Kanäle:** nummerierte Bereichsüberschriften, richtige Zuordnung, Themen, Schreibpausen und vollständige Rechteprofile für öffentliche, interne, CW- und Finanzbereiche.
@@ -90,7 +98,7 @@ Der Dienst verwendet das Repository **JuhlYT/GoR_Network_Discord**, Branch **mai
 | Neustart | bei Fehler, zehn Versuche; Schlafmodus aus |
 | Beendigung | keine parallelen alten und neuen Instanzen; 15 Sekunden Beendigungsfrist |
 
-Relative und zitierte Datenpfade werden einheitlich aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Absolute Pfade bleiben am bisherigen Ort. Ein fehlendes Volume erlaubt Orientierung und Rollenwahl; private Fälle, Veröffentlichungen und dauerhafte Verwaltung bleiben bis zur Vorbereitung pausiert.
+Relative und zitierte Datenpfade werden einheitlich aufgelöst. Im Container wird `data` zu `/app/data`, `./betrieb` zu `/app/betrieb`. Absolute Pfade bleiben am bisherigen Ort. Ein fehlendes Volume erlaubt Orientierung, Rollenwahl und automatische Reparatur vorhandener GoR-Gestaltung; private Fälle, neue Anlagen und dauerhafte Veröffentlichungsverwaltung bleiben bis zur tatsächlichen Anbindung pausiert.
 
 `service_starting` nennt die Version. Erst **`discord_ready`** bestätigt die geprüfte Discord-Verbindung; **`commands_registered`** mit 39 bestätigten Befehlen bestätigt die Registrierung. Ein grüner Build allein bestätigt den Login nicht. Fehlende Token und nicht rechtzeitig bestätigte Verbindungen beenden den Start mit einem festen Diagnosecode. Tokenwerte und fremde Fehlerkörper werden nicht protokolliert.
 

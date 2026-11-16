@@ -11,9 +11,10 @@ import type { LegalLinks } from "./legal_config";
 
 export type SetupMaps = { roles: Record<string, string>; categories: Record<string, string>; channels: Record<string, string> };
 export type SetupStorage = { db: Database; setting(key: string, value?: string): string | undefined };
-export type SetupContext = { guild: Guild; application: string; target: string; maps: SetupMaps; storage: SetupStorage; stopped?: () => boolean; layout?: Layout; legal?: LegalLinks };
+export type SetupContext = { guild: Guild; application: string; target: string; maps: SetupMaps; storage: SetupStorage; stopped?: () => boolean; layout?: Layout; legal?: LegalLinks; allowCreate?: boolean };
 export type SetupReport = { at: number; created: number; updated: number; unchanged: number; adopted: number; issues: { key: string; code: string }[]; status: string };
 export const SETUP_ISSUES: Record<string, string> = {
+  storage_required: "Für diesen fehlenden Eintrag benötigt der Bot ein dauerhaftes Einrichtungsjournal. Bestehende GoR-Bereiche werden weiter gepflegt.",
   missing_permissions: "Dem Bot fehlen Rechte für diesen Bereich.", role_uneditable: "Die Rolle liegt über der Botrolle oder wird von Discord verwaltet.",
   creation_unknown: "Eine frühere Anlage ist unklar. Vorhandenen Eintrag zuordnen; nicht erneut anlegen.",
   name_conflict: "Ein nicht zugeordneter Eintrag mit diesem Namen existiert bereits.", duplicate_marker: "Eine Anlagekennung ist mehrfach vorhanden.",
@@ -79,6 +80,7 @@ export class AutoSetup {
       this.journal.bind(key, matches[0].id); this.report.adopted++; return matches[0];
     }
     if ([...entries.values()].some(value => value.name === name)) throw setupError("name_conflict");
+    if (this.ctx.allowCreate === false) throw setupError("storage_required");
     const pending = this.journal.begin(key);
     if (!pending.fresh) throw setupError("creation_unknown");
     this.check();
@@ -181,6 +183,7 @@ export class AutoSetup {
       if (matches.length === 1) { target = matches[0]; this.report.adopted++; }
       else {
         if (saved?.state === "creating" || saved?.state === "review" || previous === "pending") throw setupError("creation_unknown");
+        if (this.ctx.allowCreate === false) throw setupError("storage_required");
         const pending = this.journal.begin(resource);
         if (!pending.fresh) throw setupError("creation_unknown");
         target = await channel.send({ ...payload, allowedMentions: { parse: [] }, nonce: pending.record.marker!.slice(-24), enforceNonce: true });

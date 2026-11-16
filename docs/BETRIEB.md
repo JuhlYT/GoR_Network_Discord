@@ -27,7 +27,7 @@ Ankündigungen bleiben 15 Minuten als private Vorschau verfügbar. Nur ihr Verfa
 
 ## Daten und Sicherungen
 
-`/data/support.sqlite` enthält Metadaten, Einstellungen, Interaktionskennungen und vorbereitete Veröffentlichungstexte. SQLite verwendet WAL und vollständige Synchronisierung. Beim Start läuft eine Integritätsprüfung. Ein fehlendes Railway-Volume führt seit v4.1.1 zu einem eingeschränkten Betrieb statt zu einem Verbindungsabbruch: Orientierung, Status und Rollenwahl funktionieren weiter; Fallverwaltung, Veröffentlichungen, Bedienfeldverwaltung und dauerhafte Sicherungen bleiben pausiert. Ein temporäres Verzeichnis wird nicht als dauerhafte Speicherung ausgegeben.
+`/data/support.sqlite` enthält Metadaten, Einstellungen, Interaktionskennungen und vorbereitete Veröffentlichungstexte. SQLite verwendet WAL und vollständige Synchronisierung. Beim Start läuft eine Integritätsprüfung. Ein fehlendes Railway-Volume führt seit v4.1.1 zu einem eingeschränkten Betrieb statt zu einem Verbindungsabbruch: Orientierung, Status und Rollenwahl funktionieren weiter; Fallverwaltung, neue Veröffentlichungen und dauerhafte Sicherungen bleiben pausiert. Seit 4.5 gestaltet und repariert die Automatik bestehende eindeutig zugeordnete GoR-Bereiche auch ohne Volume; neue Discord-Anlagen benötigen das dauerhafte Journal. Ein temporäres Verzeichnis wird nicht als dauerhafte Speicherung ausgegeben.
 
 Version 4.2.0 ergänzt die Tabelle `project_reviews` mit Fallnummer, Phase, handelnder Person und Zeitpunkt. Vorhandene Tabellen und Fallzuordnungen bleiben erhalten. Formularbeschreibungen werden ausschließlich in den privaten Discord-Fallkanal gesendet. Die persönliche Übersicht fragt nur Fälle des angemeldeten Mitglieds auf diesem Server ab; Teamübersichten filtern bei jeder Interaktion nach dessen aktuellen Zuständigkeiten.
 
@@ -59,7 +59,7 @@ Bei SIGTERM werden laufende verwaltete Änderungen abgewartet und der Dienst sau
 
 ### Slash-Befehle fehlen
 
-1. Im aktuellen Railway-Deployment muss `service_starting` die Version **4.4.0** nennen. Ein älteres Deployment enthält diese Reparatur noch nicht.
+1. Im aktuellen Railway-Deployment muss `service_starting` die Version **4.5.0** nennen. Ein älteres Deployment enthält diese Reparatur noch nicht.
 2. `commands_registration_starting` startet die Gateway-unabhängige Registrierung. `commands_registered` mit `confirmed: 39`, `total: 39` bestätigt die Befehle auf Server `1571171516677361704`. Ein einzelner Fehler nennt unter `commands_definition_failed` den betroffenen Befehlsnamen; andere gültige Befehle werden trotzdem registriert. `commands_registration_failed_retrying` bedeutet, dass die vollständige Registrierung noch nicht bestätigt ist.
 3. `discord_ready` muss ebenfalls erscheinen: registrierte Befehle allein bestätigen keine aktive Verbindung zum Empfangen und Beantworten der Interaktionen. Bei `token_invalid`, `wrong_application` oder `guild_access_missing` den Laufzeitwert beziehungsweise die Installation der vorgesehenen GoR-App prüfen. Keine Tokenwerte in Chat oder Screenshots weitergeben.
 4. Sind beide Schritte bestätigt, aber `/start` wird im Zielserver nicht angeboten: unter **Servereinstellungen → Integrationen → GoR-App** prüfen, ob die App und ihre Befehle für Nutzer, Rollen und Kanal freigegeben sind. Im betreffenden Kanal muss **Anwendungsbefehle verwenden** erlaubt sein. Danach Discord einmal mit Strg+R neu laden und `/start` im GoR-Startkanal auswählen. Ein direkt auf diesem Server registrierter Befehl benötigt keine globale Wartefrist.

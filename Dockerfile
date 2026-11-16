@@ -12,7 +12,7 @@ WORKDIR /app
 COPY --from=dependencies --chown=bun:bun /app/node_modules ./node_modules
 COPY --chown=bun:bun package.json gor_network.ts command_registry.ts storage_path.ts community_ui.ts auto_setup.ts setup_journal.ts setup_permissions.ts setup_native.ts server_blueprint.ts server_content.ts ./
 COPY --chown=bun:bun feature_base.ts legal_config.ts commands_v44.ts community_state.ts community_actions.ts retention.ts backup_remote.ts change_plan.ts update44.ts ./
-COPY --chown=bun:bun restore_backup.ts access_review.ts ./
+COPY --chown=bun:bun restore_backup.ts access_review.ts setup_controls.ts ./
 COPY --chmod=755 scripts/docker-entrypoint.sh /usr/local/bin/gor-entrypoint
 ENV NODE_ENV=production GOR_DATA_DIR=/data
 EXPOSE 8080

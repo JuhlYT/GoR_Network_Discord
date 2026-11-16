@@ -27,7 +27,7 @@ def run_scenario(root, bun, port, scenario):
         mocked = scenario != 'missing-token'
         if mocked:
             env.update(RAILWAY_ENVIRONMENT_ID='startup-fixture', TOKEN='fixture-not-a-real-discord-token')
-            if scenario != 'railway-no-volume':
+            if scenario not in ('railway-no-volume','automatic-setup-temporary','flow-design-start-temporary'):
                 env['RAILWAY_VOLUME_MOUNT_PATH'] = data
             if scenario == 'railway-admin':
                 env['GOR_FIXTURE_ADMIN'] = 'true'
@@ -45,7 +45,7 @@ def run_scenario(root, bun, port, scenario):
                 env['GOR_FIXTURE_FLOW'] = scenario.removeprefix('flow-')
             if scenario in ('flow-project','flow-privacy','flow-complaint'):
                 env['GOR_SUPPORT_ENABLED'] = 'true'
-            if scenario in ('automatic-setup', 'setup-failure'):
+            if scenario in ('automatic-setup', 'automatic-setup-temporary', 'setup-failure') or scenario.startswith('flow-design-'):
                 env.update(GOR_AUTO_SETUP='true', GOR_FIXTURE_SETUP=scenario)
         entry = 'tests/fixtures/startup.ts' if mocked else 'gor_network.ts'
         process = subprocess.Popen([bun, 'run', entry], cwd=root, env=env,
@@ -88,7 +88,7 @@ def run_scenario(root, bun, port, scenario):
                             response += part
                     headers, body = response.split(b'\r\n\r\n', 1)
                     status = int(headers.split(b' ')[1])
-                    setup_ready = scenario not in ('automatic-setup', 'setup-failure') or json.loads(body).get('setup') == ('ready' if scenario == 'automatic-setup' else 'attention')
+                    setup_ready = scenario not in ('automatic-setup', 'automatic-setup-temporary', 'setup-failure') or json.loads(body).get('setup') == ('attention' if scenario == 'setup-failure' else 'ready')
                     count = '0' if scenario == 'command-sync-failure' else '38' if scenario == 'command-partial-failure' else '39'
                     commands_ready = json.loads(body).get('command_count') == count
                     if (status == wanted and setup_ready and commands_ready) or route != '/health' or time.monotonic() > deadline:
@@ -104,7 +104,7 @@ def run_scenario(root, bun, port, scenario):
                         raise AssertionError('Command confirmation count was incorrect')
                     if health['commands'] != ('pending' if scenario in ('command-sync-failure', 'command-partial-failure') else 'registered'):
                         raise AssertionError('Failed command registration was reported as complete')
-                    if scenario == 'railway-no-volume' and health['storage'] != 'temporary':
+                    if scenario in ('railway-no-volume','automatic-setup-temporary','flow-design-start-temporary') and health['storage'] != 'temporary':
                         raise AssertionError('Missing volume was reported as persistent')
                 results.append({'route': route, 'status': status})
             time.sleep(.1)
@@ -125,7 +125,7 @@ def run_scenario(root, bun, port, scenario):
                 raise AssertionError('Partial command failure was not identified')
             if scenario.startswith('flow-') and 'fixture_flow_passed:' + scenario.removeprefix('flow-') not in logs:
                 raise AssertionError('The actual interaction handler did not confirm the community flow: ' + scenario)
-            if scenario in ('automatic-setup', 'setup-failure') and 'fixture_automatic_setup_called' not in logs:
+            if (scenario in ('automatic-setup', 'automatic-setup-temporary', 'setup-failure') or scenario.startswith('flow-design-')) and 'fixture_automatic_setup_called' not in logs:
                 raise AssertionError('Ready event did not trigger the automatic setup runner')
             if 'fixture-not-a-real-discord-token' in logs or 'private-fixture-body' in logs:
                 raise AssertionError('Private credential or error body leaked')
@@ -152,7 +152,8 @@ def main():
                  'command-sync-failure', 'command-partial-failure', 'wrong-application']
     scenarios += ['flow-' + flow for flow in ('start', 'public-guide', 'private-guide', 'private-roles', 'own', 'team', 'phase', 'project', 'setup', 'setupstatus')]
     scenarios += ['flow-' + flow for flow in ('legal','mydata','privacy','complaint','ideaform','ideas','events','finance','payment','legacy-payment','statusbutton','updatedenied','financedenied')]
-    scenarios += ['automatic-setup', 'setup-failure']
+    scenarios += ['automatic-setup', 'automatic-setup-temporary', 'setup-failure']
+    scenarios += ['flow-design-' + flow for flow in ('start','start-temporary','pause','resume','denied','drift')]
     results = [run_scenario(root, args.bun, args.port, scenario) for scenario in scenarios]
     print(json.dumps({'smoke_test': 'passed', 'scenarios': results}))
 

@@ -6,7 +6,7 @@ import { ChannelType, PermissionFlagsBits as P, GuildOnboarding, type Guild } fr
 import { Store, APPLICATION, GUILD } from "./gor_network";
 import { AutoSetup, adoptSetupResource, hydrateManagedMaps, issueCode, type SetupContext } from "./auto_setup";
 import { SetupJournal } from "./setup_journal";
-import { LAYOUT } from "./server_blueprint";
+import { LAYOUT, LEGACY_MESSAGE_IDS } from "./server_blueprint";
 import { MESSAGE_KEYS, setupMessage } from "./server_content";
 import { profileOverwrites, overwriteShape } from "./setup_permissions";
 import { LayoutFixture } from "./tests/fixtures/layout";
@@ -187,5 +187,54 @@ describe("Automatische GoR-Einrichtung", () => {
     expect(report.issues).toContainEqual({ key: "message:start", code: "not_owned" });
     expect(server.calls.some(c => c.action === "message.edit" && c.id === foreign.id)).toBe(false);
     await expect(adoptSetupResource(ctx, "message:start", foreign.id)).rejects.toThrow();
+  });
+});
+
+describe("Servergestaltung ohne dauerhaftes Fallarchiv", () => {
+  test("bekannte Bereiche und eigene Infotafeln werden auch nach einem frischen Start ohne neue Anlagen repariert", async () => {
+    const server=new LayoutFixture(), original=context(server);
+    await new AutoSetup(original).run();
+    for(const key of MESSAGE_KEYS) {
+      const channel=server.channelRows.get(original.maps.channels[key]), [message]=[...channel.rows.values()];
+      channel.rows.clear();message.id=LEGACY_MESSAGE_IDS[key];channel.rows.set(message.id,message);
+    }
+    const fresh=context(server);fresh.maps=structuredClone(original.maps);fresh.allowCreate=false;
+    const start=server.channelRows.get(fresh.maps.channels.start);
+    start.name="veraltet";start.topic="Alter Text";[...start.rows.values()][0].embeds=[];
+    server.roleRows.get(fresh.maps.roles.support).color=123;
+    server.calls=[];
+    const report=await new AutoSetup(fresh).run();
+    expect(report.issues).toEqual([]);
+    expect(start.name).toBe("start");expect(start.topic).toContain("Willkommen");
+    expect(fresh.storage.setting("community_panel_message_id")).toBe(LEGACY_MESSAGE_IDS.start);
+    expect(server.roleRows.get(fresh.maps.roles.support).color).toBe(LAYOUT.roles.find(r=>r.key==="support")!.color);
+    expect(server.calls.some(call=>call.action.endsWith(".create"))).toBe(false);
+    expect(server.calls.some(call=>call.action==="message.edit")).toBe(true);
+  });
+  test("ein fehlendes dauerhaftes Journal verhindert alle neuen Discord-Anlagen", async () => {
+    const server=new LayoutFixture(),ctx=context(server);ctx.allowCreate=false;
+    const report=await new AutoSetup(ctx).run();
+    expect(report.issues).toContainEqual({key:"role:networkleitung",code:"storage_required"});
+    expect(server.channelRows.size).toBe(0);expect(server.roleRows.size).toBe(2);
+    expect(server.calls.some(call=>call.action.endsWith(".create"))).toBe(false);
+  });
+  test("eine gelöschte Rolle wird gemeldet, während andere bekannte Bereiche weiter gestaltet werden", async () => {
+    const server=new LayoutFixture(),ctx=context(server);await new AutoSetup(ctx).run();
+    server.roleRows.delete(ctx.maps.roles.creator);
+    const lounge=server.channelRows.get(ctx.maps.channels.lounge);lounge.name="falsch";
+    ctx.allowCreate=false;server.calls=[];
+    const report=await new AutoSetup(ctx).run();
+    expect(report.issues).toContainEqual({key:"role:creator",code:"storage_required"});
+    expect(lounge.name).toBe("lounge");
+    expect(server.calls.some(call=>call.action.endsWith(".create"))).toBe(false);
+  });
+  test("fehlende Infotafeln und AutoMod-Regeln werden ohne Journal nicht ungesichert veröffentlicht", async () => {
+    const server=new LayoutFixture(),ctx=context(server);await new AutoSetup(ctx).run();
+    server.channelRows.get(ctx.maps.channels.start).rows.clear();server.ruleRows.clear();
+    ctx.allowCreate=false;server.calls=[];
+    const report=await new AutoSetup(ctx).run();
+    expect(report.issues).toContainEqual({key:"message:start",code:"storage_required"});
+    expect(report.issues).toContainEqual({key:"automod:mentions",code:"storage_required"});
+    expect(server.calls.some(call=>call.action.endsWith(".create"))).toBe(false);
   });
 });

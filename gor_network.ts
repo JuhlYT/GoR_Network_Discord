@@ -1,4 +1,4 @@
-/** GoR Network bot, v4.4.0. Repository and container deployment (Bun).
+/** GoR Network bot, v4.5.0. Repository and container deployment (Bun).
  * Managed setup preserves unowned areas and member assignments; no message-content intent.
  * A persistent volume is required for case and publication management, not for connecting.
  */
@@ -18,6 +18,7 @@ import type { CasePreset } from "./community_state";
 export { commandShape } from "./command_registry";
 import { reconcileServer, hydrateManagedMaps, adoptSetupResource, SETUP_ISSUES, issueCode, resourceKnown, type SetupReport, type SetupContext } from "./auto_setup";
 import { SetupJournal } from "./setup_journal";
+import { SETUP_CONTROLS, setupPolicy, setupButtons } from "./setup_controls";
 import { BASIC } from "./setup_permissions";
 import { supportView } from "./server_content";
 import { communityHub, guideView, faqView, communityNavigation, sameCommunityPanel, GUIDE_TOPICS, FAQ_TOPICS,
@@ -30,7 +31,7 @@ import {
   type Interaction, type Guild, type RepliableInteraction,
 } from "discord.js";
 
-export const VERSION = "4.4.0";
+export const VERSION = "4.5.0";
 export const GUILD = "1571171516677361704";
 export const APPLICATION = "1571174833025450064";
 export const ROLES: Record<string, string> = {
@@ -106,14 +107,16 @@ export function runtimeSettings(env: RuntimeEnv) {
   const supportEnabled = storage !== "temporary" && !["false", "0", "off", "no"].includes((env.GOR_SUPPORT_ENABLED ?? "true").trim().toLowerCase());
   return { directory, storage, supportEnabled };
 }
-const TEMPORARY_ACTIONS = new Set(["start", "hilfe", "faq", "status", "rechtliches", "events", "finanzbericht", "einrichtung", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5", "gor44:legal", "gor44:status", "gor44:events", "gor44:finance", "gor44:payment",
+const TEMPORARY_ACTIONS = new Set(["einrichten", "update_vorschau", "update_anwenden", ...Object.values(SETUP_CONTROLS), "start", "hilfe", "faq", "status", "rechtliches", "events", "finanzbericht", "einrichtung", "rollen", "unterstuetzen", "serverpruefen", "gor:audit:v5", "gor:roles:v4", "gor:roles:open:v5", "gor44:legal", "gor44:status", "gor44:events", "gor44:finance", "gor44:payment",
   ...GUIDE_TOPICS.map(topic => "gor:guide:v5:" + topic)]);
 export function requireStorage(settings: ReturnType<typeof runtimeSettings>, action: string) {
-  if (settings.storage === "temporary" && !TEMPORARY_ACTIONS.has(action))
-    throw new UserError(`Diese Funktion wird gerade vorbereitet. Die Networkleitung hilft dir über <#${CHANNELS.kontakt}> weiter.`, "storage_required");
+  const previewAction = /^gor44:(update:apply|draft:cancel):[a-f0-9-]{36}$/.test(action);
+  if (settings.storage === "temporary" && !TEMPORARY_ACTIONS.has(action) && !previewAction)
+    throw new UserError(`Der Bot kann Anfragen derzeit nicht dauerhaft speichern. Diese Funktion benötigt den verbundenen Datenspeicher. Die automatische Servergestaltung und /einrichten sind verfügbar. Die Networkleitung hilft dir über <#${CHANNELS.kontakt}> weiter.`, "storage_required");
 }
 export function errorDiagnostic(error: any) {
   const code = error?.code ?? error?.cause?.code;
+  if (code === "storage_required") return { code, hint: "Anfragen und neue Anlagen benötigen ein tatsächlich verbundenes Railway-Volume. Vorhandene GoR-Bereiche werden im Gestaltungsmodus weiter gepflegt." };
   if (code === "startup_timeout") return { code, hint: "Die Discord-Verbindung wurde innerhalb von 120 Sekunden nicht bestätigt. Die letzte Startphase und den Netzwerkzugriff auf Discord prüfen." };
   if (code === "EACCES" || code === "EPERM" || code === "SQLITE_READONLY")
     return { code: "storage_permissions", hint: "Das Datenverzeichnis oder die Datenbank ist nicht beschreibbar. Volume-Zugriff und Containerstart prüfen." };
@@ -452,11 +455,11 @@ export function healthResponse(path: string, ready: boolean, dbOk: boolean, stat
     { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv; startupTimeoutMs?: number; setupRunner?: (context: SetupContext) => Promise<SetupReport> } = {}) {
+export async function main(options: { createClient?: () => Client; environment?: RuntimeEnv; startupTimeoutMs?: number; setupRunner?: (context: SetupContext) => Promise<SetupReport>; setupDebounceMs?: number } = {}) {
   process.umask(0o077);
   console.log(JSON.stringify({ at: new Date().toISOString(), event: "service_starting", version: VERSION }));
   const env = options.environment || Bun.env;
-  const settings = runtimeSettings(env);
+  const settings = runtimeSettings(env), layoutPolicy = setupPolicy(settings.storage);
   if (settings.storage === "temporary") safeLog("storage_temporary_support_paused");
   if (settings.storage === "persistent" && env.GOR_DATA_DIR
       && storageLocation({ GOR_DATA_DIR: env.GOR_DATA_DIR }).directory !== settings.directory)
@@ -476,6 +479,7 @@ export async function main(options: { createClient?: () => Client; environment?:
   let state = "starting", stopped = false, lastHealthy = Date.now(), administratorReported = false;
   const setupEnabled = !["false", "0", "off", "no"].includes((env.GOR_AUTO_SETUP ?? "true").trim().toLowerCase());
   let setupRunning = false, setupState = "pending", lastSetupAttempt = 0;
+  let setupWake: ReturnType<typeof setTimeout> | undefined;
   let setupReport: SetupReport | null = null;
   try { setupReport = JSON.parse(store.setting("auto_setup_report") || "null"); } catch {}
   let maintenance: ReturnType<typeof setTimeout> | undefined;
@@ -484,7 +488,8 @@ export async function main(options: { createClient?: () => Client; environment?:
     fetch(request) { let dbOk = false; try { dbOk = store.health(); } catch {}
       return healthResponse(new URL(request.url).pathname, ready && client.isReady(), dbOk, state,
         { storage: settings.storage, commands: commands.ready ? "registered" : "pending", command_phase: commands.phase,
-          command_count: String(commands.confirmed), command_total: String(commandDefinitions().length), setup: setupState }); } });
+          command_count: String(commands.confirmed), command_total: String(commandDefinitions().length), setup: setupState,
+          setup_mode: layoutPolicy.allowCreate ? "full" : "existing_resources" }); } });
   safeLog("health_listener_started");
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T,>(fn: () => Promise<T>) => {
@@ -498,6 +503,7 @@ export async function main(options: { createClient?: () => Client; environment?:
   safeLog("community44_storage_ready");
   async function shutdown(code: number) {
     if (stopped) return; stopped = true; ready = false; state = "stopping"; clearTimeout(maintenance); clearTimeout(startupDeadline);
+    clearTimeout(setupWake);
     const force = setTimeout(() => process.exit(code || 1), 12_000); force.unref();
     await queue; await client.destroy();
     try { store.backup(); } catch { safeLog("backup_failed"); }
@@ -701,6 +707,21 @@ export async function main(options: { createClient?: () => Client; environment?:
     else await i.deferReply({ flags: MessageFlags.Ephemeral });
     const member = await memberFor(i), guild = member.guild;
     await assertBot(guild);
+    if (i.isButton() && [SETUP_CONTROLS.start, SETUP_CONTROLS.pause, SETUP_CONTROLS.resume].includes(i.customId as any)) {
+      own(member);
+      if (i.customId === SETUP_CONTROLS.start) {
+        if (setupRunning) { await answer(i, "Die Gestaltung läuft bereits. /einrichtung zeigt den Stand."); return; }
+        void runSetup(true); await answer(i, "Die GoR-Servergestaltung wurde gestartet. /einrichtung zeigt die bestätigten Ergebnisse."); return;
+      }
+      const active = i.customId === SETUP_CONTROLS.resume;
+      if(active && !setupEnabled)throw new UserError("Die Automatik ist durch GOR_AUTO_SETUP=false im Hosting pausiert. /einrichten startet einen einzelnen Abgleich.");
+      store.setting("auto_setup_paused", active ? "false" : "true"); store.audit(member.id,"auto_setup_mode",active?"enabled":"paused");
+      if(active) {lastSetupAttempt=0;void runSetup();}
+      else {clearTimeout(setupWake);setupState=setupRunning?"pausing":"paused";}
+      await answer(i,(active?"Die automatische Servergestaltung ist aktiviert.":"Die automatische Servergestaltung ist pausiert.")+
+        (settings.storage==="temporary"?" Diese Betriebswahl gilt bis zum nächsten Botstart.":"")+" /einrichtung zeigt den Stand.");
+      return;
+    }
     if(await features.handle(i,member))return;
     if (i.isButton() && i.customId.startsWith("gor:guide:v5:")) {
       const topic = i.customId.slice("gor:guide:v5:".length);
@@ -870,14 +891,14 @@ export async function main(options: { createClient?: () => Client; environment?:
       case "einrichtung": {
         leadership(member);
         const issues = setupReport?.issues || [], pending = new SetupJournal(store.db).pending();
-        const mode = settings.storage === "temporary" ? "Wartet auf dauerhafte Datenhaltung" : !setupEnabled ? "Über die Laufzeitkonfiguration pausiert" : store.setting("auto_setup_paused") === "true" ? "Vom Inhaber pausiert" : "Automatisch beim Start und alle 15 Minuten";
+        const mode = !setupEnabled ? "Über die Laufzeitkonfiguration pausiert" : store.setting("auto_setup_paused") === "true" ? "Vom Inhaber pausiert" : layoutPolicy.label + " · beim Start, bei Änderungen und alle 15 Minuten";
         const view = embed("GoR · Automatische Serverpflege", `**Betrieb:** ${mode}\n**Aktueller Stand:** ${setupRunning ? "Einrichtung läuft" : setupState}`)
           .addFields({ name: "Verwaltete Bereiche", value: "16 Rollen · 10 Kategorien · 41 Kanäle · 11 Infotafeln\nDazu Community-Profil, AFK, Einstieg, Rollenwahl und Erwähnungsschutz." });
         if (setupReport) view.addFields({ name: "Letzter Lauf", value: `<t:${Math.floor(setupReport.at / 1000)}:R>\n${setupReport.created} angelegt · ${setupReport.updated} aktualisiert · ${setupReport.unchanged} bereits passend` });
         if (issues.length) view.addFields({ name: `${issues.length} Punkte prüfen`, value: issues.slice(0, 6).map(item => `**${item.key}**\n${SETUP_ISSUES[item.code] || SETUP_ISSUES.unexpected_error}`).join("\n\n") });
         if (pending.length) view.addFields({ name: "Unklare Anlagen", value: pending.slice(0, 8).map(item => `\`${item.key}\``).join("\n") + "\nInhaber: vorhandenen Eintrag mit /einrichtung_zuordnen bestätigen." });
-        view.addFields({name:"Update 4.4 · Kontakt, Datenschutz & Betrieb",value:features.readiness()});
-        await answer(i, "", { embeds: [view.toJSON()],components:member.id===guild.ownerId?features.settingsButtons():[] }); break;
+        view.addFields({name:"Gestaltungsmodus",value:layoutPolicy.notice},{name:"Kontakt, Datenschutz & Betrieb",value:features.readiness()});
+        await answer(i, "", { embeds: [view.toJSON()],components:member.id===guild.ownerId?[...setupButtons(store.setting("auto_setup_paused")==="true"),...features.settingsButtons()]:[] }); break;
       }
       case "einrichten": {
         own(member); if (setupRunning) { await answer(i, "Die Einrichtung läuft bereits. /einrichtung zeigt den Stand."); break; }
@@ -885,6 +906,7 @@ export async function main(options: { createClient?: () => Client; environment?:
       }
       case "einrichtung_automatik": {
         own(member); const active = i.options.getBoolean("aktiv", true);
+        if(active && !setupEnabled)throw new UserError("Die Automatik ist durch GOR_AUTO_SETUP=false im Hosting pausiert. /einrichten startet einen einzelnen Abgleich.");
         const protectedKey=i.options.getString("schutz");if(protectedKey)setProtection(store,protectedKey,i.options.getInteger("stunden")??24);
         const person=i.options.getUser("datenschutz_person");
         if(person){await guild.members.fetch({user:person.id,force:true});let list:string[]=[];try{list=JSON.parse(store.setting("privacy_contacts_json_v44")||"[]");}catch{}
@@ -944,6 +966,7 @@ export async function main(options: { createClient?: () => Client; environment?:
   client.on(Events.InteractionCreate, i => {
     void handle(i).catch(async e => {
       safeLog("interaction_failed", typeof e?.code === "number" ? e.code : undefined);
+      if (e instanceof UserError && e.code === "storage_required") safeLog("storage_required");
       if (i.isRepliable()) try {
         await answer(i, e instanceof PublicError ? e.message : "Der Vorgang konnte nicht bestätigt werden. Bitte die Networkleitung informieren. Unklare Änderungen werden nicht auf Verdacht wiederholt.");
       } catch { safeLog("interaction_response_failed"); }
@@ -961,7 +984,6 @@ export async function main(options: { createClient?: () => Client; environment?:
   }
   async function runSetup(force = false,before?:()=>Promise<void>):Promise<SetupReport|undefined> {
     if (stopped || !verified || !client.isReady() || setupRunning) return;
-    if (settings.storage === "temporary") { setupState = "storage_required"; return; }
     if (!force && (!setupEnabled || store.setting("auto_setup_paused") === "true")) { setupState = "paused"; return; }
     const delay = setupReport?.issues.some(item => item.code === "lease_busy") ? 60_000 : setupReport?.issues.length ? 300_000 : 900_000;
     if (!force && Date.now() - lastSetupAttempt < delay) return;
@@ -969,7 +991,7 @@ export async function main(options: { createClient?: () => Client; environment?:
     try {
       setupReport = await serial(async () => {await before?.();return (options.setupRunner || reconcileServer)({
         guild: await client.guilds.fetch(GUILD), application: APPLICATION, target: GUILD, maps: setupMaps, storage: store,
-        legal:features.publicLinks(),
+        legal:features.publicLinks(), allowCreate:layoutPolicy.allowCreate,
         stopped: () => stopped || (!force && store.setting("auto_setup_paused") === "true"),
       });});
       setupState = !force && store.setting("auto_setup_paused") === "true" ? "paused" : setupReport.status;
@@ -979,6 +1001,19 @@ export async function main(options: { createClient?: () => Client; environment?:
     } catch (error) { setupState = "attention"; console.error(JSON.stringify({ at: new Date().toISOString(), event: "auto_setup_failed", code: issueCode(error) })); if(before)throw error; }
     finally { setupRunning = false; }
   }
+  function requestLayoutRefresh(guildId: string | undefined, kind: "role" | "channel" | "guild", id: string) {
+    if(stopped || !verified || setupRunning || guildId!==GUILD || !setupEnabled || store.setting("auto_setup_paused")==="true") return;
+    const known=kind==="guild" || (kind==="role"?Object.values(ROLES):[...Object.values(CATEGORIES),...Object.values(CHANNELS)]).includes(id);
+    if(!known) return;
+    clearTimeout(setupWake);
+    setupWake=setTimeout(()=>{lastSetupAttempt=0;void runSetup();},options.setupDebounceMs??5000);
+    setupWake.unref();
+  }
+  client.on(Events.GuildRoleUpdate, (_previous, role) => requestLayoutRefresh(role.guild.id,"role",role.id));
+  client.on(Events.GuildRoleDelete, role => requestLayoutRefresh(role.guild.id,"role",role.id));
+  client.on(Events.ChannelUpdate, (_previous, channel) => requestLayoutRefresh("guild" in channel?channel.guild.id:undefined,"channel",channel.id));
+  client.on(Events.ChannelDelete, channel => requestLayoutRefresh("guild" in channel?channel.guild.id:undefined,"channel",channel.id));
+  client.on(Events.GuildUpdate, (_previous, guild) => requestLayoutRefresh(guild.id,"guild",guild.id));
   client.on(Events.ClientReady, () => {
     safeLog("discord_gateway_ready");
     void serial(async () => {
