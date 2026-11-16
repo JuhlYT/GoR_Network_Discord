@@ -2,7 +2,11 @@
 
 Ein gemeinsamer Einstieg für Spieler. Klare Wege für Support und neue Serverprojekte. GoR verbindet verschiedene Spiele und Communities unter einem Network.
 
-## Version 4.5.0: Servergestaltung direkt durch den Bot
+## Version 4.5.1: Servergestaltung mit bestätigtem Ergebnis
+
+`/einrichten` und **Server jetzt gestalten** zeigen jetzt Fortschritt und den tatsächlichen Abschluss in derselben persönlichen Antwort. Ein bereits laufender Abgleich wird mitverfolgt. Fehlender Speicher, verweigerte Rechte und eine zu niedrige Botrolle werden im vollständigen Einrichtungsbericht benannt; eine Startmeldung allein wird nicht mehr als Ergebnis ausgegeben.
+
+### Servergestaltung seit 4.5
 
 Die automatische Gestaltung startet auch ohne Railway-Volume für alle bereits eindeutig zugeordneten GoR-Rollen, Kategorien, Kanäle und eigenen Infotafeln. Ein fehlender Datenspeicher blockiert nicht mehr den gesamten Gestaltungsablauf. Neue Discord-Anlagen benötigen weiterhin das dauerhafte Journal, damit unklare Antworten nach einem Neustart keine Duplikate erzeugen. Private Fallverwaltung bleibt daran getrennt gebunden.
 

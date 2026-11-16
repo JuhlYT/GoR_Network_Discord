@@ -59,7 +59,7 @@ Bei SIGTERM werden laufende verwaltete Änderungen abgewartet und der Dienst sau
 
 ### Slash-Befehle fehlen
 
-1. Im aktuellen Railway-Deployment muss `service_starting` die Version **4.5.0** nennen. Ein älteres Deployment enthält diese Reparatur noch nicht.
+1. Im aktuellen Railway-Deployment muss `service_starting` die Version **4.5.1** nennen. Ein älteres Deployment enthält diese Reparatur noch nicht.
 2. `commands_registration_starting` startet die Gateway-unabhängige Registrierung. `commands_registered` mit `confirmed: 39`, `total: 39` bestätigt die Befehle auf Server `1571171516677361704`. Ein einzelner Fehler nennt unter `commands_definition_failed` den betroffenen Befehlsnamen; andere gültige Befehle werden trotzdem registriert. `commands_registration_failed_retrying` bedeutet, dass die vollständige Registrierung noch nicht bestätigt ist.
 3. `discord_ready` muss ebenfalls erscheinen: registrierte Befehle allein bestätigen keine aktive Verbindung zum Empfangen und Beantworten der Interaktionen. Bei `token_invalid`, `wrong_application` oder `guild_access_missing` den Laufzeitwert beziehungsweise die Installation der vorgesehenen GoR-App prüfen. Keine Tokenwerte in Chat oder Screenshots weitergeben.
 4. Sind beide Schritte bestätigt, aber `/start` wird im Zielserver nicht angeboten: unter **Servereinstellungen → Integrationen → GoR-App** prüfen, ob die App und ihre Befehle für Nutzer, Rollen und Kanal freigegeben sind. Im betreffenden Kanal muss **Anwendungsbefehle verwenden** erlaubt sein. Danach Discord einmal mit Strg+R neu laden und `/start` im GoR-Startkanal auswählen. Ein direkt auf diesem Server registrierter Befehl benötigt keine globale Wartefrist.
