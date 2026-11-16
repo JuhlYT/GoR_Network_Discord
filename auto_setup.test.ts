@@ -11,6 +11,7 @@ import { MESSAGE_KEYS, setupMessage } from "./server_content";
 import { profileOverwrites, overwriteShape } from "./setup_permissions";
 import { LayoutFixture } from "./tests/fixtures/layout";
 import { onboardingShape, desiredOnboarding } from "./setup_native";
+import { followSetup, setupResultView } from "./setup_controls";
 
 const paths: string[] = [], stores: Store[] = [];
 function context(fixture = new LayoutFixture()): SetupContext {
@@ -236,5 +237,55 @@ describe("Servergestaltung ohne dauerhaftes Fallarchiv", () => {
     expect(report.issues).toContainEqual({key:"message:start",code:"storage_required"});
     expect(report.issues).toContainEqual({key:"automod:mentions",code:"storage_required"});
     expect(server.calls.some(call=>call.action.endsWith(".create"))).toBe(false);
+  });
+});
+
+describe("Bestätigtes Einrichtungsergebnis statt bloßer Startmeldung", () => {
+  test("jeder Einrichtungsschritt meldet geordneten Fortschritt bis zum tatsächlichen Abschluss", async () => {
+    const server=new LayoutFixture(),ctx=context(server),progress:any[]=[];
+    ctx.onProgress=value=>{progress.push({...value});};
+    const report=await new AutoSetup(ctx).run(), last=progress.at(-1);
+    expect(report.status).toBe("ready");
+    expect(last.completed).toBe(last.total);expect(last.total).toBe(84);
+    expect(progress.some(p=>p.key==="role:support")).toBe(true);
+    expect(progress.some(p=>p.key==="message:start")).toBe(true);
+    expect(progress.every((p,i)=>!i||p.completed>=progress[i-1].completed)).toBe(true);
+    expect(last.created).toBe(report.created);expect(last.updated).toBe(report.updated);
+  });
+  test("ein ausgefallener Fortschrittskanal verhindert keine Discord-Gestaltung", async () => {
+    const server=new LayoutFixture(),ctx=context(server);
+    ctx.onProgress=async()=>{throw new Error("private-fixture-body");};
+    const report=await new AutoSetup(ctx).run();
+    expect(report.status).toBe("ready");expect(server.channelRows.size).toBe(51);
+  });
+  test("eine ausstehende Einrichtung erhält erst nach ihrem Ergebnis eine Abschlussmeldung", async () => {
+    let finish!:(value:any)=>void;
+    const job=new Promise<any>(resolve=>{finish=resolve;}),replies:any[]=[];
+    const following=followSetup({version:"fixture",storage:"persistent",allowCreate:true,
+      task:()=>job,progress:()=>undefined,reply:async view=>{replies.push(view);},intervalMs:1000});
+    await Promise.resolve();
+    expect(replies).toHaveLength(1);expect(replies[0].embeds[0].title).toContain("läuft");
+    finish({at:1,created:0,updated:0,unchanged:84,adopted:0,issues:[],status:"ready"});
+    await following;
+    expect(replies.at(-1).embeds[0].title).toContain("Bereits passend");
+    expect(replies.at(-1).embeds[0].description).toContain("keine sichtbaren Änderungen");
+    expect(replies.at(-1).files).toHaveLength(1);
+  });
+  test("ein fehlender oder abgebrochener Lauf wird nicht als erfolgreicher Abschluss dargestellt", async () => {
+    for(const task of [()=>Promise.resolve(undefined),()=>Promise.reject(new Error("private-fixture-body"))]) {
+      const replies:any[]=[];
+      await followSetup({version:"fixture",storage:"temporary",allowCreate:false,
+        task,progress:()=>undefined,reply:async view=>{replies.push(view);}});
+      expect(replies.at(-1).embeds[0].title).toContain("Kein Abgleich bestätigt");
+      expect(JSON.stringify(replies)).not.toContain("private-fixture-body");
+    }
+  });
+  test("blockierte Änderungen nennen Ursache und nächsten Schritt im tatsächlichen Ergebnis", () => {
+    const report={at:1,created:0,updated:0,unchanged:0,adopted:0,status:"attention",issues:[
+      {key:"role:networkleitung",code:"role_uneditable"},{key:"channel:start",code:"missing_permissions"},{key:"message:start",code:"storage_required"}]};
+    const view=setupResultView(report,{version:"fixture",storage:"temporary",allowCreate:false}),text=view.embeds[0].description!;
+    expect(view.embeds[0].title).toContain("offenen Punkten");
+    expect(text).toContain("Botrolle");expect(text).toContain("Volume");expect(text).toContain("Kanäle verwalten");
+    expect(text.length).toBeLessThanOrEqual(4096);
   });
 });

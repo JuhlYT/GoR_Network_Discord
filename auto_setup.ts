@@ -11,10 +11,12 @@ import type { LegalLinks } from "./legal_config";
 
 export type SetupMaps = { roles: Record<string, string>; categories: Record<string, string>; channels: Record<string, string> };
 export type SetupStorage = { db: Database; setting(key: string, value?: string): string | undefined };
-export type SetupContext = { guild: Guild; application: string; target: string; maps: SetupMaps; storage: SetupStorage; stopped?: () => boolean; layout?: Layout; legal?: LegalLinks; allowCreate?: boolean };
+export type SetupContext = { guild: Guild; application: string; target: string; maps: SetupMaps; storage: SetupStorage; stopped?: () => boolean; layout?: Layout; legal?: LegalLinks; allowCreate?: boolean; onProgress?: (progress: SetupProgress) => void | Promise<void> };
+export type SetupProgress = { key: string; completed: number; total: number; created: number; updated: number; unchanged: number; issues: number };
 export type SetupReport = { at: number; created: number; updated: number; unchanged: number; adopted: number; issues: { key: string; code: string }[]; status: string };
 export const SETUP_ISSUES: Record<string, string> = {
   storage_required: "Für diesen fehlenden Eintrag benötigt der Bot ein dauerhaftes Einrichtungsjournal. Bestehende GoR-Bereiche werden weiter gepflegt.",
+  invalid_payload: "Discord lehnt die Einstellungen dieses Einrichtungsschritts ab.", resource_missing: "Ein benötigter Discord-Eintrag ist nicht mehr vorhanden.",
   missing_permissions: "Dem Bot fehlen Rechte für diesen Bereich.", role_uneditable: "Die Rolle liegt über der Botrolle oder wird von Discord verwaltet.",
   creation_unknown: "Eine frühere Anlage ist unklar. Vorhandenen Eintrag zuordnen; nicht erneut anlegen.",
   name_conflict: "Ein nicht zugeordneter Eintrag mit diesem Namen existiert bereits.", duplicate_marker: "Eine Anlagekennung ist mehrfach vorhanden.",
@@ -30,6 +32,8 @@ export const SETUP_ISSUES: Record<string, string> = {
 export function setupError(code: string): Error { return Object.assign(new Error(code), { setupCode: code }); }
 export function issueCode(error: any) {
   if (Object.hasOwn(SETUP_ISSUES, error?.setupCode)) return error.setupCode as string;
+  if (error?.code === 50035) return "invalid_payload";
+  if ([10003,10008,10011].includes(error?.code)) return "resource_missing";
   if (error?.code === 50013 || error?.code === 50001 || error?.status === 403) return "missing_permissions";
   if (error?.status >= 500 || ["ETIMEDOUT", "ECONNRESET", "ENOTFOUND"].includes(error?.code ?? error?.cause?.code)) return "api_unavailable";
   return "unexpected_error";
@@ -54,6 +58,11 @@ export class AutoSetup {
   roles = new Map<string, any>();
   channels = new Map<string, any>();
   highest: any = null;
+  completed = 0;
+  get total() { return this.layout.roles.length + this.layout.categories.reduce((n,c)=>n+1+c.channels.length,0) + MESSAGE_KEYS.filter(key=>this.layout.categories.some(c=>c.channels.some(ch=>ch.key===key))).length + 6; }
+  async progress(key:string) {
+    try { await this.ctx.onProgress?.({key,completed:this.completed,total:this.total,created:this.report.created,updated:this.report.updated,unchanged:this.report.unchanged,issues:this.report.issues.length}); } catch { /* A private progress response cannot interrupt server repair. */ }
+  }
   constructor(readonly ctx: SetupContext) { this.journal = new SetupJournal(ctx.storage.db); this.layout = ctx.layout || LAYOUT; }
   protected(key: string,field: string) { return protectedField(this.ctx.storage,key,field); }
   check() {
@@ -62,11 +71,12 @@ export class AutoSetup {
   }
   async step(key: string, action: () => Promise<void>) {
     this.check();
+    await this.progress(key);
     try { await action(); }
     catch (error: any) {
       const code = issueCode(error); this.report.issues.push({ key, code });
       this.journal.fail(key, code, error?.status >= 400 && error?.status < 500 && error?.status !== 408);
-    }
+    } finally { this.completed++; await this.progress(key); }
   }
   async obtain(key: string, initial: string | undefined, name: string, entries: Map<string, any>, create: (marker: string) => Promise<any>) {
     const record = this.journal.get(key), id = record?.id || initial;
@@ -230,8 +240,11 @@ export class AutoSetup {
     if (this.ctx.guild.id !== this.ctx.target || this.ctx.guild.client.user?.id !== this.ctx.application) throw setupError("not_owned");
     if (!this.journal.acquire(this.owner)) { this.report.status = "waiting"; this.report.issues.push({ key: "setup", code: "lease_busy" }); return this.report; }
     try {
+      await this.progress("setup:roles_loading");
       this.roles = new Map((await this.ctx.guild.roles.fetch()).entries());
+      await this.progress("setup:bot_role");
       this.highest = (await this.ctx.guild.members.fetchMe()).roles.highest;
+      await this.progress("setup:channels_loading");
       this.channels = new Map([...((await this.ctx.guild.channels.fetch()).entries())].filter(([, ch]) => ch));
       await this.step("onboarding:pause", async () => {
         if (!this.privacyReady()) { const current = await this.ctx.guild.fetchOnboarding(); if (current.enabled) { await this.ctx.guild.editOnboarding({ enabled: false, reason: "GoR Einrichtung: Rollen und interne Zugriffe zuerst prüfen" }); this.report.updated++; } }

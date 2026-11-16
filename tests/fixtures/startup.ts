@@ -83,7 +83,7 @@ class FixtureClient extends EventEmitter {
         },30);
       },10);return;
     }
-    const component = ["public-guide", "private-guide", "private-roles", "payment", "statusbutton", "design-start", "design-start-temporary", "design-denied", "design-pause", "design-resume"].includes(flow);
+    const component = ["public-guide", "private-guide", "private-roles", "payment", "statusbutton", "design-start", "design-start-temporary", "design-denied", "design-pause", "design-resume", "design-blocked", "design-failure", "design-hierarchy", "design-nochange"].includes(flow);
     const modalSubmit=flow==="legacy-payment";
     const privateCard = flow.startsWith("private-") || flow.startsWith("design-");
     const command = ({ start: "start", own: "meine_faelle", team: "team", phase: "projektstatus", project: "projektanfrage", setup: "einrichten", setupstatus: "einrichtung",
@@ -93,7 +93,12 @@ class FixtureClient extends EventEmitter {
       if (acknowledgment !== (privateCard ? "update" : "reply")) throw new Error("Incorrect private/public acknowledgment");
       if (payload.allowedMentions?.parse?.length !== 0) throw new Error("Unexpected mention behavior");
       const title = payload.embeds?.[0]?.title || "", body = payload.content || "";
-      const valid = flow==="design-start" || flow==="design-start-temporary" ? body.includes("Servergestaltung wurde gestartet")
+      if(flow.startsWith("design-") && title.includes("Einrichtung läuft"))return;
+      const detail=JSON.stringify(payload.embeds);
+      const valid = flow==="design-start" || flow==="design-start-temporary" || flow==="design-nochange" ? title.includes("Bereits passend")
+        : flow==="design-blocked" ? title.includes("offenen Punkten") && detail.includes("Volume")
+        : flow==="design-failure" ? title.includes("offenen Punkten") && detail.includes("Rechte")
+        : flow==="design-hierarchy" ? title.includes("offenen Punkten") && detail.includes("Botrolle")
         : flow==="design-denied" ? body.includes("Serverinhaber")
         : flow==="design-pause" ? body.includes("Servergestaltung ist pausiert")
         : flow==="design-resume" ? body.includes("Servergestaltung ist aktiviert")
@@ -155,13 +160,20 @@ class FixtureClient extends EventEmitter {
 }
 
 const fixtureClient=new FixtureClient();
-await main({ createClient: () => fixtureClient as unknown as Client, setupDebounceMs:5,
+await main({ createClient: () => fixtureClient as unknown as Client, setupDebounceMs:5, setupProgressMs:5,
   startupTimeoutMs: Bun.env.GOR_FIXTURE_HANG === "true" ? 300 : undefined,
   setupRunner: Bun.env.GOR_FIXTURE_SETUP ? async context => {
     fixtureClient.setupCalls++;
     const temporary=!Bun.env.RAILWAY_VOLUME_MOUNT_PATH;
     if(context.allowCreate===temporary)throw new Error("Unsafe or unnecessarily blocked setup policy");
     console.log("fixture_automatic_setup_called");
+    if(Bun.env.GOR_FIXTURE_FLOW?.startsWith("design-start")) {
+      context.onProgress?.({key:"role:support",completed:5,total:84,created:0,updated:0,unchanged:5,issues:0});
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    if(Bun.env.GOR_FIXTURE_FLOW==="design-failure")throw Object.assign(new Error("private-fixture-body"),{code:50013,status:403});
+    if(Bun.env.GOR_FIXTURE_FLOW==="design-blocked" || Bun.env.GOR_FIXTURE_FLOW==="design-hierarchy")
+      return {at:Date.now(),created:0,updated:0,unchanged:0,adopted:0,issues:[{key:"role:networkleitung",code:Bun.env.GOR_FIXTURE_FLOW==="design-blocked"?"storage_required":"role_uneditable"}],status:"attention"};
     if (Bun.env.GOR_FIXTURE_SETUP === "setup-failure") throw Object.assign(new Error("private-fixture-body"), { code: 50013 });
     return { at: Date.now(), created: 0, updated: 0, unchanged: 1, adopted: 0, issues: [], status: "ready" };
   } : undefined });

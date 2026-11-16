@@ -1,4 +1,12 @@
-# GoR Network 4.5 – Servergestaltung durch den Bot
+# GoR Network 4.5.1 – Servergestaltung mit tatsächlichem Ergebnis
+
+Seit 4.5.1 zeigen `/einrichten` und **Server jetzt gestalten** den Fortschritt und danach das tatsächliche Ergebnis in derselben persönlichen Antwort. Ein bereits laufender Abgleich wird mitverfolgt. Es wird dafür kein zweiter Einrichtungslauf gestartet.
+
+Der Abschluss unterscheidet zwischen **Bereits passend**, **Einrichtung abgeschlossen** und **Einrichtung mit offenen Punkten**. Geprüfte Änderungen und offene Schlüssel werden genannt; der beigefügte Bericht enthält die vollständige Liste ohne Tokens, private Fallinhalte oder fremde Fehlertexte. Bei fehlendem Volume, verweigerten Rechten oder einer zu niedrigen Botrolle erscheinen konkrete Hinweise. Ein fehlgeschlagener äußerer Einrichtungsschritt erzeugt ebenfalls einen Fehlerbericht.
+
+`/einrichtung` zeigt während eines laufenden Abgleichs den aktuellen Schritt und Fortschritt. Die HTTP-Antwort nennt `setup_step`, `setup_completed` und `setup_total`; der Verbindungsstatus bleibt davon getrennt.
+
+## Servergestaltung seit 4.5
 
 Der Aufbau ist im Bot programmiert. Es müssen keine Rollen, Kategorien oder Infotafeln nach einer Vorlage von Hand gepflegt werden. Nach einer bestätigten Discord-Verbindung beginnt die Automatik selbstständig, sofern `GOR_AUTO_SETUP` nicht ausdrücklich deaktiviert ist.
 
