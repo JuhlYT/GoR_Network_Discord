@@ -1009,7 +1009,8 @@ export async function main(options: { createClient?: () => Client; environment?:
         setupState="attention";const code=issueCode(error);
         console.error(JSON.stringify({at:new Date().toISOString(),event:"auto_setup_failed",code}));
         if(before)throw error;
-        setupReport={at:Date.now(),created:setupProgress?.created||0,updated:setupProgress?.updated||0,unchanged:setupProgress?.unchanged||0,adopted:0,issues:[{key:"setup",code}],status:"attention"};
+        const progress=(()=>setupProgress)() as SetupProgress|undefined;
+        setupReport={at:Date.now(),created:progress?.created||0,updated:progress?.updated||0,unchanged:progress?.unchanged||0,adopted:0,issues:[{key:"setup",code}],status:"attention"};
         try{store.setting("auto_setup_report",JSON.stringify(setupReport));}catch{safeLog("setup_report_save_failed");}
         return setupReport;
       } finally {setupRunning=false;setupJob=null;}
